@@ -3,7 +3,9 @@
  * Utilisé uniquement côté serveur (Route Handlers) — la clé reste secrète.
  */
 
-const MODEL = "gemini-2.0-flash";
+// gemini-1.5-flash : free tier stable et large (1500 req/jour, 15 RPM).
+// gemini-2.0-flash a des quotas plus stricts/variables selon les comptes.
+const MODEL = "gemini-1.5-flash";
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 type GeminiPart = { text: string };
