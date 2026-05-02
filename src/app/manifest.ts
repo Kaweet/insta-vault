@@ -6,15 +6,25 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "Insta Vault",
     description: "Carnet d'idées de posts Instagram",
     start_url: "/",
+    scope: "/",
     display: "standalone",
     orientation: "portrait",
     background_color: "#0a0a0a",
     theme_color: "#0a0a0a",
+    categories: ["productivity", "lifestyle"],
+    lang: "fr",
     icons: [
       {
-        src: "/favicon.ico",
-        sizes: "any",
-        type: "image/x-icon",
+        src: "/icon",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/apple-icon",
+        sizes: "180x180",
+        type: "image/png",
+        purpose: "any",
       },
     ],
   };
