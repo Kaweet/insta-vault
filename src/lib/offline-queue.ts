@@ -109,6 +109,26 @@ function isNetworkError(e: unknown): boolean {
 }
 
 /**
+ * Wrap une promesse (ou thenable, comme les builders Supabase) avec un timeout.
+ * Throw "timeout" si dépassé — détecté comme erreur réseau et déclenche la queue.
+ */
+function withTimeout<T>(thenable: PromiseLike<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new TypeError("timeout")), ms);
+    Promise.resolve(thenable).then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
  * Détecteur réseau fiable basé sur un fetch réel (pas navigator.onLine,
  * qui ment notamment dans les PWA Safari iOS). Renvoie true si on peut
  * vraiment joindre Supabase.
@@ -160,30 +180,33 @@ export async function queuedCreateIdea(input: {
 
   // On TENTE toujours d'abord (navigator.onLine ment sur Safari PWA).
   // Seule une vraie erreur réseau nous fait basculer en queue.
+  // Timeout 3s pour éviter les requêtes qui hang en mode avion.
   {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const userResult = await withTimeout(
+        supabase.auth.getUser(),
+        3000,
+      );
+      const user = userResult.data.user;
       if (!user) {
-        // Auth introuvable côté client. Avant de bailout, vérifie réseau
-        // réel : si on est vraiment offline, on bascule en queue plutôt
-        // que d'erroriser l'utilisatrice.
-        const reachable = await isReallyOnline();
-        if (!reachable) throw new TypeError("offline");
-        throw new Error("Non authentifié");
+        // Auth introuvable. On bascule en queue (offline ou session perdue,
+        // dans les deux cas la queue se chargera de retry au prochain online).
+        throw new TypeError("offline");
       }
 
-      const { data, error } = await supabase
-        .from("ideas")
-        .insert({
-          user_id: user.id,
-          content: input.content,
-          transcription_source: input.transcriptionSource,
-          status: "draft",
-        })
-        .select()
-        .single();
+      const { data, error } = await withTimeout(
+        supabase
+          .from("ideas")
+          .insert({
+            user_id: user.id,
+            content: input.content,
+            transcription_source: input.transcriptionSource,
+            status: "draft",
+          })
+          .select()
+          .single(),
+        5000,
+      );
       if (error) throw error;
       const idea = data as Idea;
 
@@ -289,10 +312,10 @@ export async function queuedUpdateIdea(
   // Idée déjà en DB : on tente toujours (Safari PWA peut mentir sur navigator.onLine)
   if (!isLocal) {
     try {
-      const { error } = await supabase
-        .from("ideas")
-        .update(patch)
-        .eq("id", ideaId);
+      const { error } = await withTimeout(
+        supabase.from("ideas").update(patch).eq("id", ideaId),
+        5000,
+      );
       if (error) throw error;
       return;
     } catch (e) {
@@ -354,11 +377,11 @@ export async function queuedDeleteIdea(ideaId: string): Promise<void> {
     return;
   }
 
-  // Idée déjà en DB : on tente toujours
+  // Idée déjà en DB : on tente toujours avec timeout
   {
     try {
       const { deleteIdea } = await import("@/lib/ideas");
-      await deleteIdea(ideaId);
+      await withTimeout(deleteIdea(ideaId), 5000);
       return;
     } catch (e) {
       if (!isNetworkError(e)) throw e;

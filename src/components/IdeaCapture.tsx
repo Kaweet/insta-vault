@@ -33,6 +33,7 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
   const [isDictationMode, setIsDictationMode] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistInFlightRef = useRef(false);
 
   // Pousse un toast (auto-disparaît au bout de 2.5s)
   const pushToast = useCallback((kind: Toast["kind"], message: string) => {
@@ -61,6 +62,10 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     async (opts: { silent: boolean }): Promise<boolean> => {
       const trimmed = content.trim();
       if (!trimmed) return false;
+      // Guard contre le spam : si une persist est déjà en cours, on n'en
+      // lance pas une seconde en parallèle.
+      if (persistInFlightRef.current) return false;
+      persistInFlightRef.current = true;
       setSaveState("saving");
       try {
         if (ideaId) {
@@ -91,6 +96,8 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
         const msg = e instanceof Error ? e.message : "Erreur de sauvegarde";
         if (!opts.silent) pushToast("err", msg);
         return false;
+      } finally {
+        persistInFlightRef.current = false;
       }
     },
     [content, ideaId, transcriptionSource, pushToast],

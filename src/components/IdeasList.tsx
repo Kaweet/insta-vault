@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   getLocalPendingIdeas,
+  isReallyOnline,
   subscribeQueue,
   subscribeSynced,
   type LocalIdea,
@@ -33,6 +34,24 @@ export function IdeasList({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [pendingLocal, setPendingLocal] = useState<LocalIdea[]>([]);
   const [recentlySynced, setRecentlySynced] = useState<Set<string>>(new Set());
+  const [online, setOnline] = useState(true);
+
+  // Surveille l'état réseau pour griser les cartes Supabase quand offline
+  useEffect(() => {
+    const refresh = () => {
+      void isReallyOnline().then(setOnline);
+    };
+    refresh();
+    const interval = setInterval(refresh, 15_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   // Charge les idées pending locales et s'abonne aux changements de la queue
   useEffect(() => {
@@ -169,12 +188,14 @@ export function IdeasList({
           ideas={filtered}
           categoryById={categoryById}
           recentlySynced={recentlySynced}
+          online={online}
         />
       ) : (
         <KanbanView
           ideas={filtered}
           categoryById={categoryById}
           recentlySynced={recentlySynced}
+          online={online}
         />
       )}
     </div>
@@ -241,10 +262,12 @@ function ListView({
   ideas,
   categoryById,
   recentlySynced,
+  online,
 }: {
   ideas: (Idea | LocalIdea)[];
   categoryById: Map<string, Category>;
   recentlySynced: Set<string>;
+  online: boolean;
 }) {
   if (ideas.length === 0) {
     return (
@@ -263,6 +286,7 @@ function ListView({
             idea.category_id ? categoryById.get(idea.category_id) : undefined
           }
           justSynced={recentlySynced.has(idea.id)}
+          online={online}
         />
       ))}
     </ul>
@@ -273,10 +297,12 @@ function KanbanView({
   ideas,
   categoryById,
   recentlySynced,
+  online,
 }: {
   ideas: (Idea | LocalIdea)[];
   categoryById: Map<string, Category>;
   recentlySynced: Set<string>;
+  online: boolean;
 }) {
   const grouped: Record<IdeaStatus, (Idea | LocalIdea)[]> = {
     draft: [],
@@ -309,6 +335,7 @@ function KanbanView({
                   }
                   compact
                   justSynced={recentlySynced.has(idea.id)}
+                  online={online}
                 />
               ))
             )}
@@ -324,13 +351,17 @@ function IdeaCard({
   category,
   compact = false,
   justSynced = false,
+  online = true,
 }: {
   idea: Idea | LocalIdea;
   category?: Category;
   compact?: boolean;
   justSynced?: boolean;
+  online?: boolean;
 }) {
   const isPending = "_pending" in idea && idea._pending === true;
+  // Une carte non-pending (déjà en DB) n'est pas éditable offline
+  const lockedOffline = !isPending && !online;
   const innerContent = (
     <>
       <div className="flex items-start justify-between gap-2">
@@ -389,6 +420,21 @@ function IdeaCard({
       </div>
     </>
   );
+
+  // Carte verrouillée offline (idée Supabase non éditable hors ligne)
+  if (lockedOffline) {
+    return (
+      <li className="list-none">
+        <div
+          aria-disabled
+          title="Disponible uniquement en ligne"
+          className="block cursor-not-allowed rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 opacity-50 dark:border-neutral-800 dark:bg-neutral-900/50"
+        >
+          {innerContent}
+        </div>
+      </li>
+    );
+  }
 
   return (
     <li className="list-none">
