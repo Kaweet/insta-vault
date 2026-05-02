@@ -347,22 +347,15 @@ function IdeaCard({
     </>
   );
 
-  // Idée locale pas encore syncée : pas de lien (404 sinon)
-  if (isPending) {
-    return (
-      <li className="list-none">
-        <div className="block rounded-2xl border border-amber-200 bg-amber-50/50 px-4 py-3 opacity-90 dark:border-amber-900/50 dark:bg-amber-950/20">
-          {innerContent}
-        </div>
-      </li>
-    );
-  }
-
   return (
     <li className="list-none">
       <Link
         href={`/ideas/${idea.id}`}
-        className="block rounded-2xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700 dark:hover:bg-neutral-800"
+        className={`block rounded-2xl border px-4 py-3 transition ${
+          isPending
+            ? "border-amber-200 bg-amber-50/50 hover:border-amber-300 hover:bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/20 dark:hover:border-amber-800 dark:hover:bg-amber-950/40"
+            : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700 dark:hover:bg-neutral-800"
+        }`}
       >
         {innerContent}
       </Link>

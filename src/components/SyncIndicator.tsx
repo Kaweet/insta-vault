@@ -1,43 +1,56 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getPendingCount, subscribeQueue } from "@/lib/offline-queue";
+import {
+  getPendingCount,
+  isReallyOnline,
+  subscribeQueue,
+} from "@/lib/offline-queue";
 
 /**
  * Petit badge fixé en haut à droite quand des ops sont en attente de sync.
  * Affiche le nombre + état online/offline.
+ *
+ * On utilise isReallyOnline() (ping fetch) plutôt que navigator.onLine qui
+ * ment sur Safari iOS (notamment en mode PWA).
  */
 export function SyncIndicator() {
   const [pending, setPending] = useState(0);
-  // Initialise l'état online directement (pas dans un useEffect)
-  const [online, setOnline] = useState(() => {
-    if (typeof navigator === "undefined") return true;
-    return navigator.onLine;
-  });
+  // On démarre optimiste (online) pour ne pas afficher un faux "Hors ligne"
+  // au boot avant le premier ping
+  const [online, setOnline] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const refresh = () => {
+    const refreshPending = () => {
       void getPendingCount().then(setPending);
     };
-    refresh();
-
-    const unsub = subscribeQueue(refresh);
-    const onUp = () => {
-      setOnline(true);
-      refresh();
+    const refreshOnline = () => {
+      void isReallyOnline().then(setOnline);
     };
-    const onDown = () => setOnline(false);
-    window.addEventListener("online", onUp);
-    window.addEventListener("offline", onDown);
-    const interval = setInterval(refresh, 5000);
+
+    refreshPending();
+    refreshOnline();
+
+    const unsub = subscribeQueue(refreshPending);
+    const pendingInterval = setInterval(refreshPending, 5000);
+    const onlineInterval = setInterval(refreshOnline, 15_000);
+
+    // Au retour visibilité (PWA qui réveille), on re-check
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        refreshPending();
+        refreshOnline();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       unsub();
-      window.removeEventListener("online", onUp);
-      window.removeEventListener("offline", onDown);
-      clearInterval(interval);
+      clearInterval(pendingInterval);
+      clearInterval(onlineInterval);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

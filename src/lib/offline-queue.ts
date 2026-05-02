@@ -101,10 +101,45 @@ function isLocalId(id: string): boolean {
 
 function isNetworkError(e: unknown): boolean {
   if (!e) return false;
-  if (typeof navigator !== "undefined" && !navigator.onLine) return true;
   if (e instanceof TypeError) return true; // fetch jette TypeError quand offline
   const msg = (e as { message?: string }).message ?? "";
   return /failed to fetch|network|offline|timeout|load failed/i.test(msg);
+}
+
+/**
+ * Détecteur réseau fiable basé sur un fetch réel (pas navigator.onLine,
+ * qui ment notamment dans les PWA Safari iOS). Renvoie true si on peut
+ * vraiment joindre Supabase.
+ */
+let lastPingResult: boolean | null = null;
+let lastPingAt = 0;
+
+export async function isReallyOnline(): Promise<boolean> {
+  // Cache 5s pour éviter de spammer
+  const now = Date.now();
+  if (lastPingResult !== null && now - lastPingAt < 5000) {
+    return lastPingResult;
+  }
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!url) {
+    return typeof navigator !== "undefined" ? navigator.onLine : true;
+  }
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    // /auth/v1/health ne nécessite pas d'auth et est ultra-léger
+    const res = await fetch(`${url}/auth/v1/health`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    lastPingResult = res.ok || res.status < 500;
+  } catch {
+    lastPingResult = false;
+  }
+  lastPingAt = now;
+  return lastPingResult;
 }
 
 // ============================================================
@@ -117,9 +152,10 @@ export async function queuedCreateIdea(input: {
   audio?: { blob: Blob; mimeType: string; durationMs: number };
 }): Promise<LocalIdea> {
   const supabase = createClient();
-  const isOnline = typeof navigator === "undefined" || navigator.onLine;
 
-  if (isOnline) {
+  // On TENTE toujours d'abord (navigator.onLine ment sur Safari PWA).
+  // Seule une vraie erreur réseau nous fait basculer en queue.
+  {
     try {
       const {
         data: { user },
@@ -233,9 +269,9 @@ export async function queuedUpdateIdea(
 ): Promise<void> {
   const supabase = createClient();
   const isLocal = isLocalId(ideaId);
-  const isOnline = typeof navigator === "undefined" || navigator.onLine;
 
-  if (!isLocal && isOnline) {
+  // Idée déjà en DB : on tente toujours (Safari PWA peut mentir sur navigator.onLine)
+  if (!isLocal) {
     try {
       const { error } = await supabase
         .from("ideas")
@@ -282,7 +318,6 @@ export async function queuedUpdateIdea(
 
 export async function queuedDeleteIdea(ideaId: string): Promise<void> {
   const isLocal = isLocalId(ideaId);
-  const isOnline = typeof navigator === "undefined" || navigator.onLine;
 
   // Idée encore locale (jamais syncée) : annule en supprimant queue+store
   if (isLocal) {
@@ -301,7 +336,8 @@ export async function queuedDeleteIdea(ideaId: string): Promise<void> {
     return;
   }
 
-  if (isOnline) {
+  // Idée déjà en DB : on tente toujours
+  {
     try {
       const { deleteIdea } = await import("@/lib/ideas");
       await deleteIdea(ideaId);
@@ -366,9 +402,8 @@ export async function syncQueue(): Promise<{
   failed: number;
 }> {
   if (isSyncing) return { done: 0, failed: 0 };
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
-    return { done: 0, failed: 0 };
-  }
+  // Note : on ne check PLUS navigator.onLine ici (ment sur Safari PWA).
+  // On tente, et runOp détectera les erreurs réseau pour s'arrêter proprement.
 
   isSyncing = true;
   let done = 0;
@@ -520,11 +555,25 @@ export function bootOfflineSync() {
     void syncQueue();
   };
 
+  // Tente une sync au boot même si navigator.onLine ment (Safari PWA)
+  setTimeout(trigger, 1500);
+
+  // Réagit aux events natifs (peu fiable mais on les écoute quand même)
   window.addEventListener("online", trigger);
-  if (navigator.onLine) {
-    setTimeout(trigger, 1500);
-  }
-  setInterval(() => {
-    if (navigator.onLine) trigger();
-  }, 60_000);
+
+  // Ping réel toutes les 15s : si Supabase répond, on tente la sync
+  setInterval(async () => {
+    const ok = await isReallyOnline();
+    if (ok) trigger();
+  }, 15_000);
+
+  // Bonus : retente la sync chaque fois que l'app revient au premier plan
+  // (utile pour les PWA iOS qui se mettent en veille)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void isReallyOnline().then((ok) => {
+        if (ok) trigger();
+      });
+    }
+  });
 }
