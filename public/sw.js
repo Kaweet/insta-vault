@@ -9,7 +9,7 @@
 // si offline, le fetch échoue silencieusement et la page affiche les seules
 // idées locales (pending) + un bandeau hors ligne.
 
-const CACHE_VERSION = "v5";
+const CACHE_VERSION = "v6";
 const STATIC_CACHE = `insta-vault-static-${CACHE_VERSION}`;
 const SHELL_CACHE = `insta-vault-shell-${CACHE_VERSION}`;
 
@@ -108,8 +108,15 @@ self.addEventListener("fetch", (event) => {
     const isDynamicShell = DYNAMIC_SHELL_PREFIXES.some((p) =>
       url.pathname.startsWith(p),
     );
-    if (isShellRoute || isDynamicShell) {
+    if (isShellRoute) {
       event.respondWith(staleWhileRevalidate(req, SHELL_CACHE));
+      return;
+    }
+    if (isDynamicShell) {
+      // Pour /ideas/[id] : on cache cette URL spécifique mais on a aussi
+      // un fallback sur n'importe quelle autre /ideas/[id] déjà cachée
+      // (le shell HTML est identique, le client lit l'URL et route).
+      event.respondWith(dynamicShellWithFallback(req, "/ideas/"));
       return;
     }
   }
@@ -146,4 +153,48 @@ async function staleWhileRevalidate(req, cacheName) {
   }
   const fresh = await networkPromise;
   return fresh || Response.error();
+}
+
+/**
+ * Comme staleWhileRevalidate, mais si l'URL exacte n'est pas en cache,
+ * on cherche n'importe quelle autre URL avec le même prefix (shell partagé).
+ * Permet d'ouvrir une /ideas/[id] jamais visitée à condition qu'on en ait
+ * visité au moins une autre auparavant.
+ */
+async function dynamicShellWithFallback(req, prefix) {
+  const cache = await caches.open(SHELL_CACHE);
+  const cached = await cache.match(req);
+  const networkPromise = fetch(req)
+    .then((fresh) => {
+      if (fresh.ok) cache.put(req, fresh.clone());
+      return fresh;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    networkPromise.catch(() => {});
+    return cached;
+  }
+
+  // Pas en cache : tente le réseau, sinon fallback sur n'importe quelle
+  // autre URL cachée avec le même prefix.
+  const fresh = await networkPromise;
+  if (fresh) return fresh;
+
+  const allKeys = await cache.keys();
+  const fallback = allKeys.find((r) => {
+    try {
+      const u = new URL(r.url);
+      return u.pathname.startsWith(prefix);
+    } catch {
+      return false;
+    }
+  });
+  if (fallback) {
+    const cachedFallback = await cache.match(fallback);
+    if (cachedFallback) return cachedFallback;
+  }
+
+  // Vraiment rien : Safari affichera son écran natif
+  return Response.error();
 }

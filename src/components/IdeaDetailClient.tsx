@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { IdeaEditor } from "@/components/IdeaEditor";
 import { LocalIdeaEditor } from "@/components/LocalIdeaEditor";
@@ -19,7 +20,9 @@ type LoadState =
   | { status: "offline" }
   | { status: "error"; message: string };
 
-export function IdeaDetailClient({ ideaId }: { ideaId: string }) {
+export function IdeaDetailClient() {
+  const params = useParams<{ id: string }>();
+  const ideaId = (params?.id ?? "") as string;
   const isLocal = ideaId.startsWith("local-");
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [categories, setCategories] = useState<Category[]>([]);

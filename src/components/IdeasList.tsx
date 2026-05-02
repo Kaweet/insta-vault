@@ -10,6 +10,7 @@ import {
   syncQueue,
   type LocalIdea,
 } from "@/lib/offline-queue";
+import { createClient } from "@/lib/supabase/client";
 import type { Category, Idea, IdeaStatus } from "@/lib/types";
 
 const STATUS_LABELS: Record<IdeaStatus, string> = {
@@ -33,9 +34,38 @@ export function IdeasList({
   const [view, setView] = useState<View>("list");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [dbIdeas, setDbIdeas] = useState<Idea[]>(initialIdeas);
   const [pendingLocal, setPendingLocal] = useState<LocalIdea[]>([]);
   const [recentlySynced, setRecentlySynced] = useState<Set<string>>(new Set());
   const [online, setOnline] = useState(true);
+
+  // Re-fetch la liste Supabase côté client. Appelé après une sync ou
+  // au retour online pour voir les nouvelles idées sans recharger la page.
+  useEffect(() => {
+    const supabase = createClient();
+    let cancelled = false;
+    const fetchIdeas = async () => {
+      try {
+        const { data } = await supabase
+          .from("ideas")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(200);
+        if (!cancelled && data) setDbIdeas(data as Idea[]);
+      } catch {
+        // offline: on garde la liste précédente
+      }
+    };
+
+    // Re-fetch à chaque sync réussie
+    const unsub = subscribeSynced(() => {
+      void fetchIdeas();
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
 
   // Surveille l'état réseau pour griser les cartes Supabase quand offline.
   // Tente aussi une sync au mount et à chaque retour online/visibilité.
@@ -94,14 +124,14 @@ export function IdeasList({
         seen.add(i.id);
       }
     }
-    for (const i of initialIdeas) {
+    for (const i of dbIdeas) {
       if (!seen.has(i.id)) {
         combined.push(i);
         seen.add(i.id);
       }
     }
     return combined;
-  }, [pendingLocal, initialIdeas]);
+  }, [pendingLocal, dbIdeas]);
 
   const categoryById = useMemo(
     () => new Map(categories.map((c) => [c.id, c])),

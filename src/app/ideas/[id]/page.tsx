@@ -1,13 +1,8 @@
 import { IdeaDetailClient } from "@/components/IdeaDetailClient";
 
-// Page client-only : pas de fetch SSR, donc fonctionne offline.
-// Le shell HTML est mis en cache par le service worker au premier visit
-// et chargé instantanément ensuite.
-export default async function IdeaDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  return <IdeaDetailClient ideaId={id} />;
+// Page client-only. Le composant lit son id via useParams() au runtime,
+// donc le HTML rendu est identique pour toutes les /ideas/[id] et peut
+// servir de fallback offline pour les pages jamais visitées.
+export default function IdeaDetailPage() {
+  return <IdeaDetailClient />;
 }
