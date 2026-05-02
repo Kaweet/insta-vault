@@ -18,7 +18,17 @@ export type UseAudioRecorderResult = {
   stop: () => Promise<AudioBlobResult | null>;
 };
 
-const PREFERRED_MIME_TYPES = [
+// Sur Safari/iOS, on préfère mp4/aac qui est lisible par tous les browsers
+// (Safari sait enregistrer en webm/opus mais ne sait PAS le lire en <audio>).
+// Sur Chrome/Firefox, on garde webm/opus qui est plus efficace.
+const SAFARI_PREFERRED = [
+  "audio/mp4",
+  "audio/mp4;codecs=mp4a.40.2",
+  "audio/aac",
+  "audio/webm;codecs=opus",
+  "audio/webm",
+];
+const DEFAULT_PREFERRED = [
   "audio/webm;codecs=opus",
   "audio/webm",
   "audio/mp4",
@@ -26,9 +36,21 @@ const PREFERRED_MIME_TYPES = [
   "audio/ogg",
 ];
 
+function isSafariOrIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  // iPad Pro masque "iPad" dans l'UA récent → check aussi via maxTouchPoints
+  const isIOS =
+    /iPhone|iPad|iPod/.test(ua) ||
+    (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+  return isIOS || isSafari;
+}
+
 function pickSupportedMimeType(): string | null {
   if (typeof MediaRecorder === "undefined") return null;
-  for (const t of PREFERRED_MIME_TYPES) {
+  const list = isSafariOrIOS() ? SAFARI_PREFERRED : DEFAULT_PREFERRED;
+  for (const t of list) {
     if (MediaRecorder.isTypeSupported(t)) return t;
   }
   return null;
