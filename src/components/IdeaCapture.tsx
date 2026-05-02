@@ -1,15 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  queuedCreateIdea,
-  queuedUpdateIdea,
-} from "@/lib/offline-queue";
+import { useCallback, useRef, useState } from "react";
+import { saveIdea } from "@/lib/offline";
 import { useAudioRecorder } from "@/lib/useAudioRecorder";
 import { useSpeechRecognition } from "@/lib/useSpeechRecognition";
-
-const AUTOSAVE_DELAY_MS = 5000;
-const AUTOSAVE_MIN_CHARS = 20;
 
 type Toast = { id: number; kind: "ok" | "err"; message: string };
 
@@ -17,7 +11,6 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 
 export function IdeaCapture({ initialCount }: { initialCount: number }) {
   const [content, setContent] = useState("");
-  const [ideaId, setIdeaId] = useState<string | null>(null);
   const [count, setCount] = useState(initialCount);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -32,10 +25,8 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
   const [baseText, setBaseText] = useState("");
   const [isDictationMode, setIsDictationMode] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const persistInFlightRef = useRef(false);
 
-  // Pousse un toast (auto-disparaît au bout de 2.5s)
   const pushToast = useCallback((kind: Toast["kind"], message: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, kind, message }]);
@@ -45,8 +36,7 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     );
   }, []);
 
-  // Pendant la dictée, on affiche : baseText + transcript final + interim.
-  // En dehors de la dictée, on affiche le content tapé.
+  // Pendant la dictée : baseText + transcript final + interim. Sinon content.
   const displayedContent = isDictationMode
     ? `${baseText}${
         baseText && (speech.finalTranscript || speech.interimTranscript)
@@ -56,97 +46,53 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     : content;
 
   // ============================================================
-  // Sauvegarde
+  // Sauvegarde — chaque save crée une nouvelle idée. Pas d'auto-save.
   // ============================================================
-  const persist = useCallback(
-    async (opts: { silent: boolean }): Promise<boolean> => {
-      const trimmed = content.trim();
-      if (!trimmed) return false;
-      // Guard contre le spam : si une persist est déjà en cours, on n'en
-      // lance pas une seconde en parallèle.
+  const speechReset = speech.reset;
+  const doSave = useCallback(
+    async (params: {
+      content: string;
+      transcriptionSource: "text" | "audio";
+      audio?: { blob: Blob; mimeType: string; durationMs: number };
+    }): Promise<boolean> => {
+      const trimmed = params.content.trim();
+      if (!trimmed && !params.audio) return false;
       if (persistInFlightRef.current) return false;
       persistInFlightRef.current = true;
       setSaveState("saving");
       try {
-        if (ideaId) {
-          await queuedUpdateIdea(ideaId, {
-            content: trimmed,
-          });
-          setSaveState("saved");
-          if (!opts.silent) pushToast("ok", "Idée enregistrée ✓");
-        } else {
-          const idea = await queuedCreateIdea({
-            content: trimmed,
-            transcriptionSource,
-          });
-          setIdeaId(idea.id);
-          setSaveState("saved");
-          setCount((c) => c + 1);
-          if (!opts.silent) {
-            const offlineHint =
-              typeof navigator !== "undefined" && !navigator.onLine
-                ? " (en attente)"
-                : "";
-            pushToast("ok", `Idée enregistrée ✓${offlineHint}`);
-          }
-        }
+        const result = await saveIdea({
+          content: trimmed,
+          transcriptionSource: params.transcriptionSource,
+          audio: params.audio,
+        });
+        setSaveState("saved");
+        setCount((c) => c + 1);
+        const hint = result.kind === "pending" ? " (en attente)" : "";
+        pushToast("ok", `Idée enregistrée ✓${hint}`);
         return true;
       } catch (e) {
         setSaveState("error");
-        const msg = e instanceof Error ? e.message : "Erreur de sauvegarde";
-        if (!opts.silent) pushToast("err", msg);
+        pushToast("err", e instanceof Error ? e.message : "Erreur");
         return false;
       } finally {
         persistInFlightRef.current = false;
       }
     },
-    [content, ideaId, transcriptionSource, pushToast],
+    [pushToast],
   );
 
-  // Submit manuel ("Sauver")
-  const speechReset = speech.reset;
   const onSave = useCallback(async () => {
-    const ok = await persist({ silent: false });
+    const ok = await doSave({ content, transcriptionSource });
     if (ok) {
       setContent("");
       setBaseText("");
-      setIdeaId(null);
       setTranscriptionSource("text");
       setSaveState("idle");
       speechReset();
       textareaRef.current?.focus();
     }
-  }, [persist, speechReset]);
-
-  // Auto-save debounce
-  useEffect(() => {
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    if (content.trim().length < AUTOSAVE_MIN_CHARS) return;
-    if (speech.isListening) return; // pas pendant la dictée
-    autosaveTimerRef.current = setTimeout(() => {
-      void persist({ silent: true });
-    }, AUTOSAVE_DELAY_MS);
-    return () => {
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    };
-  }, [content, persist, speech.isListening]);
-
-  // Sauvegarde au beforeunload (fermeture onglet/app)
-  useEffect(() => {
-    const handler = (e: BeforeUnloadEvent) => {
-      if (
-        content.trim().length >= AUTOSAVE_MIN_CHARS &&
-        saveState !== "saved"
-      ) {
-        // On tente une sauvegarde sync. Note: les browsers limitent fortement
-        // ce qu'on peut faire ici. On utilise sendBeacon-like via fetch keepalive.
-        e.preventDefault();
-        void persist({ silent: true });
-      }
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [content, persist, saveState]);
+  }, [content, transcriptionSource, doSave, speechReset]);
 
   // ============================================================
   // Dictée
@@ -165,7 +111,6 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     setIsDictationMode(true);
     setTranscriptionSource("audio");
     speechReset();
-    // Démarrer enregistrement audio en parallèle (backup) — si supporté
     if (recorderIsSupported) {
       const ok = await recorderStart();
       if (!ok) {
@@ -174,7 +119,6 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
         return;
       }
     }
-    // Démarrer transcription si supportée
     if (speechIsSupported) {
       speechStart();
     } else {
@@ -193,10 +137,6 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
 
   const stopDictation = useCallback(async () => {
     speechStop();
-
-    // Commit la transcription finale dans le state `content`.
-    // On inclut aussi interimTranscript : sur Safari iOS, la dernière phrase
-    // peut rester en "interim" si on stoppe vite après avoir parlé.
     const transcript = speech.finalTranscript + speech.interimTranscript;
     const finalContent = (
       baseText + (baseText && transcript ? "\n" : "") + transcript
@@ -205,61 +145,34 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     setIsDictationMode(false);
 
     if (!recorderIsRecording) return;
-
     const audio = await recorderStop();
     if (!audio) return;
 
-    setSaveState("saving");
-    try {
-      if (!ideaId) {
-        // Nouvelle idée : queuedCreate gère insert + upload audio (online ou queue)
-        const idea = await queuedCreateIdea({
-          content: finalContent,
-          transcriptionSource: "audio",
-          audio: {
-            blob: audio.blob,
-            mimeType: audio.mimeType,
-            durationMs: audio.durationMs,
-          },
-        });
-        setIdeaId(idea.id);
-        setCount((c) => c + 1);
-      } else {
-        // Idée existante : update content + tente upload audio
-        await queuedUpdateIdea(ideaId, {
-          content: finalContent,
-        });
-        // Pour l'audio sur idée existante : si online on tente direct,
-        // si fail réseau queuedCreateIdea-like behavior n'est pas dispo.
-        // Fallback simple : tente l'upload, ignore l'erreur sinon (pas idéal
-        // mais le cas est rare : créer une idée à partir d'un texte tapé,
-        // PUIS dicter par-dessus avec réseau qui tombe juste à ce moment).
-        try {
-          const { uploadAudioForIdea } = await import("@/lib/ideas");
-          await uploadAudioForIdea(ideaId, audio);
-        } catch {
-          pushToast("err", "Audio non uploadé (réessaie plus tard)");
-        }
-      }
-      setSaveState("saved");
-      const offlineHint =
-        typeof navigator !== "undefined" && !navigator.onLine
-          ? " (en attente)"
-          : "";
-      pushToast("ok", `Audio enregistré ✓${offlineHint}`);
-    } catch (e) {
-      setSaveState("error");
-      pushToast("err", e instanceof Error ? e.message : "Erreur");
+    const ok = await doSave({
+      content: finalContent,
+      transcriptionSource: "audio",
+      audio: {
+        blob: audio.blob,
+        mimeType: audio.mimeType,
+        durationMs: audio.durationMs,
+      },
+    });
+    if (ok) {
+      setContent("");
+      setBaseText("");
+      setTranscriptionSource("text");
+      setSaveState("idle");
+      speechReset();
     }
   }, [
     baseText,
+    doSave,
     recorderIsRecording,
     recorderStop,
     speechStop,
     speech.finalTranscript,
     speech.interimTranscript,
-    ideaId,
-    pushToast,
+    speechReset,
   ]);
 
   // ============================================================

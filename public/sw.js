@@ -1,41 +1,14 @@
-// Insta Vault — Service Worker offline-first
-// Stratégie :
-// - Précache les routes principales (/, /ideas, /categories) à l'install
-// - Stale-while-revalidate pour ces routes (cache d'abord, réseau en arrière-plan)
-// - Cache-first pour les assets statiques
-// - Bypass complet pour /api/*, /auth/*, et les requêtes Supabase
-//
-// Les data Supabase (liste d'idées etc.) sont toujours fetchées en réseau :
-// si offline, le fetch échoue silencieusement et la page affiche les seules
-// idées locales (pending) + un bandeau hors ligne.
+// Insta Vault — Service Worker minimaliste
+// Sa seule mission : permettre l'installation PWA (Safari iOS exige un SW
+// avec un fetch handler pour considérer une app comme installable).
+// On ne cache QUE les assets statiques pour accélérer les chargements
+// répétés. Tout le reste passe direct au serveur.
 
-const CACHE_VERSION = "v6";
+const CACHE_VERSION = "v8-minimal";
 const STATIC_CACHE = `insta-vault-static-${CACHE_VERSION}`;
-const SHELL_CACHE = `insta-vault-shell-${CACHE_VERSION}`;
-
-const PRECACHE_URLS = ["/", "/ideas", "/categories"];
-
-// Routes dynamiques qu'on cache au moment du visit (pour offline ensuite)
-const DYNAMIC_SHELL_PREFIXES = ["/ideas/"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    (async () => {
-      const cache = await caches.open(SHELL_CACHE);
-      // Précache best-effort : si un fetch fail, on ne bloque pas l'install
-      await Promise.all(
-        PRECACHE_URLS.map(async (url) => {
-          try {
-            const res = await fetch(url, { credentials: "include" });
-            if (res.ok) await cache.put(url, res);
-          } catch {
-            // ignore
-          }
-        }),
-      );
-      await self.skipWaiting();
-    })(),
-  );
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (event) => {
@@ -44,12 +17,7 @@ self.addEventListener("activate", (event) => {
       const keys = await caches.keys();
       await Promise.all(
         keys
-          .filter(
-            (k) =>
-              k.startsWith("insta-vault-") &&
-              k !== STATIC_CACHE &&
-              k !== SHELL_CACHE,
-          )
+          .filter((k) => k.startsWith("insta-vault-") && k !== STATIC_CACHE)
           .map((k) => caches.delete(k)),
       );
       await self.clients.claim();
@@ -59,34 +27,11 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  const url = new URL(req.url);
-
-  // Ne traite que GET
   if (req.method !== "GET") return;
-
-  // Bypass requêtes externes (Supabase notamment) : data toujours réseau
+  const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Bypass /api/* et /auth/*
-  if (
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/auth/")
-  ) {
-    return;
-  }
-
-  // Bypass les fetches RSC (navigation client-side Next.js).
-  // Ils contiennent des données live qu'on ne veut PAS cacher.
-  if (
-    url.search.includes("_rsc=") ||
-    req.headers.get("RSC") ||
-    req.headers.get("Next-Router-State-Tree") ||
-    req.headers.get("Next-Router-Prefetch")
-  ) {
-    return;
-  }
-
-  // Assets statiques Next : cache-first
+  // Cache uniquement les assets statiques Next + icônes
   if (
     url.pathname.startsWith("/_next/static/") ||
     url.pathname.startsWith("/icon") ||
@@ -94,38 +39,14 @@ self.addEventListener("fetch", (event) => {
     url.pathname === "/manifest.webmanifest" ||
     url.pathname === "/favicon.ico"
   ) {
-    event.respondWith(cacheFirst(req, STATIC_CACHE));
+    event.respondWith(cacheFirst(req));
     return;
   }
-
-  // Navigations HTML : on cache toutes les routes pré-cachées + dynamiques shell
-  const isHtmlNavigation =
-    req.mode === "navigate" ||
-    req.headers.get("accept")?.includes("text/html");
-
-  if (isHtmlNavigation) {
-    const isShellRoute = PRECACHE_URLS.includes(url.pathname);
-    const isDynamicShell = DYNAMIC_SHELL_PREFIXES.some((p) =>
-      url.pathname.startsWith(p),
-    );
-    if (isShellRoute) {
-      event.respondWith(staleWhileRevalidate(req, SHELL_CACHE));
-      return;
-    }
-    if (isDynamicShell) {
-      // Pour /ideas/[id] : on cache cette URL spécifique mais on a aussi
-      // un fallback sur n'importe quelle autre /ideas/[id] déjà cachée
-      // (le shell HTML est identique, le client lit l'URL et route).
-      event.respondWith(dynamicShellWithFallback(req, "/ideas/"));
-      return;
-    }
-  }
-
-  // Le reste : pas de cache, le browser parle direct au serveur.
+  // Pour tout le reste : on laisse le browser parler direct au serveur
 });
 
-async function cacheFirst(req, cacheName) {
-  const cache = await caches.open(cacheName);
+async function cacheFirst(req) {
+  const cache = await caches.open(STATIC_CACHE);
   const cached = await cache.match(req);
   if (cached) return cached;
   try {
@@ -135,66 +56,4 @@ async function cacheFirst(req, cacheName) {
   } catch {
     return cached || Response.error();
   }
-}
-
-async function staleWhileRevalidate(req, cacheName) {
-  const cache = await caches.open(cacheName);
-  const cached = await cache.match(req);
-  const networkPromise = fetch(req)
-    .then((fresh) => {
-      if (fresh.ok) cache.put(req, fresh.clone());
-      return fresh;
-    })
-    .catch(() => null);
-
-  if (cached) {
-    networkPromise.catch(() => {});
-    return cached;
-  }
-  const fresh = await networkPromise;
-  return fresh || Response.error();
-}
-
-/**
- * Comme staleWhileRevalidate, mais si l'URL exacte n'est pas en cache,
- * on cherche n'importe quelle autre URL avec le même prefix (shell partagé).
- * Permet d'ouvrir une /ideas/[id] jamais visitée à condition qu'on en ait
- * visité au moins une autre auparavant.
- */
-async function dynamicShellWithFallback(req, prefix) {
-  const cache = await caches.open(SHELL_CACHE);
-  const cached = await cache.match(req);
-  const networkPromise = fetch(req)
-    .then((fresh) => {
-      if (fresh.ok) cache.put(req, fresh.clone());
-      return fresh;
-    })
-    .catch(() => null);
-
-  if (cached) {
-    networkPromise.catch(() => {});
-    return cached;
-  }
-
-  // Pas en cache : tente le réseau, sinon fallback sur n'importe quelle
-  // autre URL cachée avec le même prefix.
-  const fresh = await networkPromise;
-  if (fresh) return fresh;
-
-  const allKeys = await cache.keys();
-  const fallback = allKeys.find((r) => {
-    try {
-      const u = new URL(r.url);
-      return u.pathname.startsWith(prefix);
-    } catch {
-      return false;
-    }
-  });
-  if (fallback) {
-    const cachedFallback = await cache.match(fallback);
-    if (cachedFallback) return cachedFallback;
-  }
-
-  // Vraiment rien : Safari affichera son écran natif
-  return Response.error();
 }

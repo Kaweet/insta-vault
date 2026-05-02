@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { BottomNav } from "@/components/BottomNav";
 import { OfflineSyncBoot } from "@/components/OfflineSyncBoot";
+import { OfflineStatusPill } from "@/components/OfflineStatusPill";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
-import { SyncedToast } from "@/components/SyncedToast";
-import { SyncIndicator } from "@/components/SyncIndicator";
 import { TopProgress } from "@/components/TopProgress";
 import "./globals.css";
 
@@ -51,8 +50,7 @@ export default function RootLayout({
         <ServiceWorkerRegistration />
         <OfflineSyncBoot />
         <TopProgress />
-        <SyncIndicator />
-        <SyncedToast />
+        <OfflineStatusPill />
         {children}
         <BottomNav />
       </body>

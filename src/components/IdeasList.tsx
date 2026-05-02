@@ -3,13 +3,10 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
-  getLocalPendingIdeas,
-  isReallyOnline,
-  subscribeQueue,
-  subscribeSynced,
-  syncQueue,
-  type LocalIdea,
-} from "@/lib/offline-queue";
+  listPending,
+  subscribe,
+  type PendingIdeaView,
+} from "@/lib/offline";
 import { createClient } from "@/lib/supabase/client";
 import type { Category, Idea, IdeaStatus } from "@/lib/types";
 
@@ -21,8 +18,14 @@ const STATUS_LABELS: Record<IdeaStatus, string> = {
 const STATUS_ORDER: IdeaStatus[] = ["draft", "preparing", "published"];
 
 type View = "list" | "kanban";
-type CategoryFilter = "all" | "none" | string; // "all", "none", or category id
+type CategoryFilter = "all" | "none" | string;
 type StatusFilter = "all" | IdeaStatus;
+
+// Carte unifiée pour l'affichage : soit une vraie idée Supabase, soit une
+// idée pending locale (rendue avec un statut/catégorie virtuels).
+type AnyIdea =
+  | { kind: "db"; idea: Idea }
+  | { kind: "pending"; pending: PendingIdeaView };
 
 export function IdeasList({
   initialIdeas,
@@ -35,12 +38,9 @@ export function IdeasList({
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [dbIdeas, setDbIdeas] = useState<Idea[]>(initialIdeas);
-  const [pendingLocal, setPendingLocal] = useState<LocalIdea[]>([]);
-  const [recentlySynced, setRecentlySynced] = useState<Set<string>>(new Set());
-  const [online, setOnline] = useState(true);
+  const [pending, setPending] = useState<PendingIdeaView[]>([]);
 
-  // Re-fetch la liste Supabase côté client. Appelé après une sync ou
-  // au retour online pour voir les nouvelles idées sans recharger la page.
+  // Refresh DB côté client : mount + visibility + sync events
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
@@ -57,89 +57,51 @@ export function IdeasList({
       }
     };
 
-    // Re-fetch à chaque sync réussie
-    const unsub = subscribeSynced(() => {
-      void fetchIdeas();
-    });
+    void fetchIdeas();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void fetchIdeas();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    // subscribe au module offline : à chaque sync, refetch
+    const unsub = subscribe(() => void fetchIdeas());
     return () => {
       cancelled = true;
       unsub();
-    };
-  }, []);
-
-  // Surveille l'état réseau pour griser les cartes Supabase quand offline.
-  // Tente aussi une sync au mount et à chaque retour online/visibilité.
-  useEffect(() => {
-    const refresh = async () => {
-      const ok = await isReallyOnline();
-      setOnline(ok);
-      if (ok) void syncQueue();
-    };
-    void refresh();
-    const interval = setInterval(refresh, 15_000);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
-  // Charge les idées pending locales et s'abonne aux changements de la queue
+  // Refresh des pendings au mount + à chaque event subscribe
   useEffect(() => {
     const refresh = () => {
-      void getLocalPendingIdeas().then(setPendingLocal);
+      void listPending().then(setPending);
     };
     refresh();
-    return subscribeQueue(refresh);
+    return subscribe(refresh);
   }, []);
-
-  // Track les idées fraîchement sync pour afficher un ✓ vert ~10s
-  useEffect(() => {
-    return subscribeSynced((e) => {
-      setRecentlySynced((prev) => {
-        const next = new Set(prev);
-        next.add(e.realId);
-        return next;
-      });
-      setTimeout(() => {
-        setRecentlySynced((prev) => {
-          const next = new Set(prev);
-          next.delete(e.realId);
-          return next;
-        });
-      }, 10_000);
-    });
-  }, []);
-
-  // Combine pending (en tête, plus récent) + idées DB. Dédoublonne par id.
-  const allIdeas = useMemo(() => {
-    const seen = new Set<string>();
-    const combined: (Idea | LocalIdea)[] = [];
-    for (const i of pendingLocal) {
-      if (!seen.has(i.id)) {
-        combined.push(i);
-        seen.add(i.id);
-      }
-    }
-    for (const i of dbIdeas) {
-      if (!seen.has(i.id)) {
-        combined.push(i);
-        seen.add(i.id);
-      }
-    }
-    return combined;
-  }, [pendingLocal, dbIdeas]);
 
   const categoryById = useMemo(
     () => new Map(categories.map((c) => [c.id, c])),
     [categories],
   );
 
+  const allIdeas: AnyIdea[] = useMemo(() => {
+    const out: AnyIdea[] = [];
+    for (const p of pending) out.push({ kind: "pending", pending: p });
+    for (const i of dbIdeas) out.push({ kind: "db", idea: i });
+    return out;
+  }, [pending, dbIdeas]);
+
   const filtered = useMemo(() => {
-    return allIdeas.filter((idea) => {
+    return allIdeas.filter((item) => {
+      if (item.kind === "pending") {
+        // Les pending n'ont pas de catégorie/statut — on les affiche toujours
+        // sauf si un filtre statut autre que "all" est actif
+        if (statusFilter !== "all" && statusFilter !== "draft") return false;
+        if (categoryFilter !== "all" && categoryFilter !== "none") return false;
+        return true;
+      }
+      const idea = item.idea;
       if (categoryFilter === "none" && idea.category_id !== null) return false;
       if (
         categoryFilter !== "all" &&
@@ -154,7 +116,6 @@ export function IdeasList({
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-      {/* View toggle */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex gap-1 rounded-full border border-neutral-200 bg-white p-0.5 dark:border-neutral-800 dark:bg-neutral-900">
           <ViewBtn active={view === "list"} onClick={() => setView("list")}>
@@ -169,7 +130,6 @@ export function IdeasList({
         </span>
       </div>
 
-      {/* Category filter */}
       <div className="flex flex-wrap gap-2">
         <FilterPill
           active={categoryFilter === "all"}
@@ -195,7 +155,6 @@ export function IdeasList({
         ))}
       </div>
 
-      {/* Status filter (only in list view, kanban shows columns) */}
       {view === "list" ? (
         <div className="flex flex-wrap gap-2">
           <FilterPill
@@ -216,21 +175,10 @@ export function IdeasList({
         </div>
       ) : null}
 
-      {/* Content */}
       {view === "list" ? (
-        <ListView
-          ideas={filtered}
-          categoryById={categoryById}
-          recentlySynced={recentlySynced}
-          online={online}
-        />
+        <ListView ideas={filtered} categoryById={categoryById} />
       ) : (
-        <KanbanView
-          ideas={filtered}
-          categoryById={categoryById}
-          recentlySynced={recentlySynced}
-          online={online}
-        />
+        <KanbanView ideas={filtered} categoryById={categoryById} />
       )}
     </div>
   );
@@ -295,13 +243,9 @@ function FilterPill({
 function ListView({
   ideas,
   categoryById,
-  recentlySynced,
-  online,
 }: {
-  ideas: (Idea | LocalIdea)[];
+  ideas: AnyIdea[];
   categoryById: Map<string, Category>;
-  recentlySynced: Set<string>;
-  online: boolean;
 }) {
   if (ideas.length === 0) {
     return (
@@ -312,15 +256,13 @@ function ListView({
   }
   return (
     <ul className="flex flex-col gap-2">
-      {ideas.map((idea) => (
+      {ideas.map((item) => (
         <IdeaCard
-          key={idea.id}
-          idea={idea}
-          category={
-            idea.category_id ? categoryById.get(idea.category_id) : undefined
+          key={
+            item.kind === "pending" ? `p-${item.pending.id}` : `d-${item.idea.id}`
           }
-          justSynced={recentlySynced.has(idea.id)}
-          online={online}
+          item={item}
+          categoryById={categoryById}
         />
       ))}
     </ul>
@@ -330,21 +272,19 @@ function ListView({
 function KanbanView({
   ideas,
   categoryById,
-  recentlySynced,
-  online,
 }: {
-  ideas: (Idea | LocalIdea)[];
+  ideas: AnyIdea[];
   categoryById: Map<string, Category>;
-  recentlySynced: Set<string>;
-  online: boolean;
 }) {
-  const grouped: Record<IdeaStatus, (Idea | LocalIdea)[]> = {
+  const grouped: Record<IdeaStatus, AnyIdea[]> = {
     draft: [],
     preparing: [],
     published: [],
   };
-  for (const idea of ideas) grouped[idea.status].push(idea);
-
+  for (const item of ideas) {
+    if (item.kind === "pending") grouped.draft.push(item);
+    else grouped[item.idea.status].push(item);
+  }
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       {STATUS_ORDER.map((s) => (
@@ -358,18 +298,16 @@ function KanbanView({
                 —
               </p>
             ) : (
-              grouped[s].map((idea) => (
+              grouped[s].map((item) => (
                 <IdeaCard
-                  key={idea.id}
-                  idea={idea}
-                  category={
-                    idea.category_id
-                      ? categoryById.get(idea.category_id)
-                      : undefined
+                  key={
+                    item.kind === "pending"
+                      ? `p-${item.pending.id}`
+                      : `d-${item.idea.id}`
                   }
+                  item={item}
+                  categoryById={categoryById}
                   compact
-                  justSynced={recentlySynced.has(idea.id)}
-                  online={online}
                 />
               ))
             )}
@@ -381,106 +319,100 @@ function KanbanView({
 }
 
 function IdeaCard({
-  idea,
-  category,
+  item,
+  categoryById,
   compact = false,
-  justSynced = false,
-  online = true,
 }: {
-  idea: Idea | LocalIdea;
-  category?: Category;
+  item: AnyIdea;
+  categoryById: Map<string, Category>;
   compact?: boolean;
-  justSynced?: boolean;
-  online?: boolean;
 }) {
-  const isPending = "_pending" in idea && idea._pending === true;
-  // Une carte non-pending (déjà en DB) n'est pas éditable offline
-  const lockedOffline = !isPending && !online;
-  const innerContent = (
-    <>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          {idea.title ? (
-            <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-              {idea.title}
-            </p>
-          ) : null}
-          <p
-            className={`whitespace-pre-wrap text-sm text-neutral-700 dark:text-neutral-300 ${
-              compact ? "line-clamp-2" : "line-clamp-3"
-            }`}
-          >
-            {idea.content || (
-              <span className="italic text-neutral-400">
-                (audio sans transcription)
-              </span>
-            )}
-          </p>
-        </div>
-        {isPending ? (
-          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-            ⏳ En attente
-          </span>
-        ) : justSynced ? (
-          <span
-            title="Synchronisée à l'instant"
-            className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-          >
-            ✓ Synchronisée
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-400">
-        <div className="flex items-center gap-2">
-          {category ? (
-            <span
-              className="flex items-center gap-1"
-              style={{ color: category.color ?? "#6b7280" }}
-            >
-              <span
-                className="h-2 w-2 rounded-full"
-                style={{ backgroundColor: category.color ?? "#6b7280" }}
-              />
-              {category.name}
-            </span>
-          ) : null}
-          <span>{idea.transcription_source === "audio" ? "🎤" : "✍️"}</span>
-        </div>
-        <span className="shrink-0">
-          {new Date(idea.created_at).toLocaleString("fr-FR", {
-            dateStyle: "short",
-          })}
-        </span>
-      </div>
-    </>
-  );
-
-  // Carte verrouillée offline (idée Supabase non éditable hors ligne)
-  if (lockedOffline) {
+  if (item.kind === "pending") {
+    const p = item.pending;
     return (
       <li className="list-none">
         <div
-          aria-disabled
-          title="Disponible uniquement en ligne"
-          className="block cursor-not-allowed rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 opacity-50 dark:border-neutral-800 dark:bg-neutral-900/50"
+          className="block cursor-default rounded-2xl border border-amber-200 bg-amber-50/50 px-4 py-3 dark:border-amber-900/50 dark:bg-amber-950/20"
+          aria-label="Idée en attente de synchronisation"
         >
-          {innerContent}
+          <div className="flex items-start justify-between gap-2">
+            <p
+              className={`min-w-0 flex-1 whitespace-pre-wrap text-sm text-neutral-700 dark:text-neutral-300 ${
+                compact ? "line-clamp-2" : "line-clamp-3"
+              }`}
+            >
+              {p.content || (
+                <span className="italic text-neutral-400">
+                  (audio sans transcription)
+                </span>
+              )}
+            </p>
+            <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              ⏳ En attente
+            </span>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-400">
+            <span>{p.transcriptionSource === "audio" ? "🎤" : "✍️"}</span>
+            <span>
+              {new Date(p.createdAt).toLocaleString("fr-FR", {
+                dateStyle: "short",
+              })}
+            </span>
+          </div>
         </div>
       </li>
     );
   }
 
+  const idea = item.idea;
+  const category = idea.category_id
+    ? categoryById.get(idea.category_id)
+    : undefined;
+
   return (
     <li className="list-none">
       <Link
         href={`/ideas/${idea.id}`}
-        className={`block rounded-2xl border px-4 py-3 transition ${
-          isPending
-            ? "border-amber-200 bg-amber-50/50 hover:border-amber-300 hover:bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/20 dark:hover:border-amber-800 dark:hover:bg-amber-950/40"
-            : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700 dark:hover:bg-neutral-800"
-        }`}
+        className="block rounded-2xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700 dark:hover:bg-neutral-800"
       >
-        {innerContent}
+        {idea.title ? (
+          <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            {idea.title}
+          </p>
+        ) : null}
+        <p
+          className={`whitespace-pre-wrap text-sm text-neutral-700 dark:text-neutral-300 ${
+            compact ? "line-clamp-2" : "line-clamp-3"
+          }`}
+        >
+          {idea.content || (
+            <span className="italic text-neutral-400">
+              (audio sans transcription)
+            </span>
+          )}
+        </p>
+        <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-400">
+          <div className="flex items-center gap-2">
+            {category ? (
+              <span
+                className="flex items-center gap-1"
+                style={{ color: category.color ?? "#6b7280" }}
+              >
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: category.color ?? "#6b7280" }}
+                />
+                {category.name}
+              </span>
+            ) : null}
+            <span>{idea.transcription_source === "audio" ? "🎤" : "✍️"}</span>
+          </div>
+          <span className="shrink-0">
+            {new Date(idea.created_at).toLocaleString("fr-FR", {
+              dateStyle: "short",
+            })}
+          </span>
+        </div>
       </Link>
     </li>
   );

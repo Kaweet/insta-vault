@@ -3,10 +3,7 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import {
-  queuedDeleteIdea,
-  queuedUpdateIdea,
-} from "@/lib/offline-queue";
+import { deleteIdea, updateIdea } from "@/lib/ideas";
 import type { Category, Idea, IdeaStatus, Media } from "@/lib/types";
 
 // Panneau IA caché temporairement (cf. décision 2026-05-02). Pour réactiver,
@@ -81,18 +78,14 @@ export function IdeaEditor({
         category_id: categoryId,
         status,
       };
-      await queuedUpdateIdea(idea.id, patch);
+      await updateIdea(idea.id, patch);
       // Update local optimiste pour que `dirty` repasse à false
       setIdea((prev) => ({
         ...prev,
         ...patch,
         updated_at: new Date().toISOString(),
       }));
-      const offlineHint =
-        typeof navigator !== "undefined" && !navigator.onLine
-          ? " (en attente)"
-          : "";
-      pushToast("ok", `Idée enregistrée ✓${offlineHint}`);
+      pushToast("ok", "Idée enregistrée ✓");
     } catch (e) {
       pushToast("err", e instanceof Error ? e.message : "Erreur");
     } finally {
@@ -105,7 +98,7 @@ export function IdeaEditor({
     setStatus(newStatus);
     if (newStatus === idea.status) return;
     try {
-      await queuedUpdateIdea(idea.id, { status: newStatus });
+      await updateIdea(idea.id, { status: newStatus });
       setIdea((prev) => ({ ...prev, status: newStatus }));
       pushToast("ok", `Statut: ${STATUS_LABELS[newStatus]}`);
     } catch (e) {
@@ -116,7 +109,7 @@ export function IdeaEditor({
   async function onDelete() {
     setBusy(true);
     try {
-      await queuedDeleteIdea(idea.id);
+      await deleteIdea(idea.id);
       router.push("/ideas");
     } catch (e) {
       pushToast("err", e instanceof Error ? e.message : "Erreur");
