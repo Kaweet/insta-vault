@@ -123,7 +123,9 @@ export async function updateIdea(
   ideaId: string,
   patch: {
     title?: string | null;
+    hook?: string | null;
     content?: string;
+    caption?: string | null;
     category_id?: string | null;
     status?: "draft" | "preparing" | "published";
   },

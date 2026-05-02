@@ -35,7 +35,9 @@ export type PendingOp =
         ideaId: string; // realId Supabase OU localId si pas encore syncé
         patch: {
           title?: string | null;
+          hook?: string | null;
           content?: string;
+          caption?: string | null;
           category_id?: string | null;
           status?: IdeaStatus;
           ai_caption?: string | null;
@@ -226,7 +228,9 @@ export async function queuedCreateIdea(input: {
     id: localId,
     user_id: "local",
     title: null,
+    hook: null,
     content: input.content,
+    caption: null,
     transcription_source: input.transcriptionSource,
     category_id: null,
     status: "draft",
@@ -270,7 +274,9 @@ export async function queuedUpdateIdea(
   ideaId: string,
   patch: {
     title?: string | null;
+    hook?: string | null;
     content?: string;
+    caption?: string | null;
     category_id?: string | null;
     status?: IdeaStatus;
     ai_caption?: string | null;
@@ -300,7 +306,9 @@ export async function queuedUpdateIdea(
     const merged: LocalIdea = {
       ...local,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.hook !== undefined ? { hook: patch.hook } : {}),
       ...(patch.content !== undefined ? { content: patch.content } : {}),
+      ...(patch.caption !== undefined ? { caption: patch.caption } : {}),
       ...(patch.category_id !== undefined
         ? { category_id: patch.category_id }
         : {}),

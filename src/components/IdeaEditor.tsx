@@ -3,12 +3,15 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import { aiCategorize, aiRewrite, type RewriteResult } from "@/lib/ai";
 import {
   queuedDeleteIdea,
   queuedUpdateIdea,
 } from "@/lib/offline-queue";
 import type { Category, Idea, IdeaStatus, Media } from "@/lib/types";
+
+// Panneau IA caché temporairement (cf. décision 2026-05-02). Pour réactiver,
+// décommenter les imports + le bloc IA dans le JSX et la logique aiCategorize/aiRewrite.
+// import { aiCategorize, aiRewrite, type RewriteResult } from "@/lib/ai";
 
 const STATUS_LABELS: Record<IdeaStatus, string> = {
   draft: "💡 Brouillon",
@@ -30,24 +33,14 @@ export function IdeaEditor({
   const router = useRouter();
   const [idea, setIdea] = useState(initialIdea);
   const [title, setTitle] = useState(initialIdea.title ?? "");
+  const [hook, setHook] = useState(initialIdea.hook ?? "");
   const [content, setContent] = useState(initialIdea.content);
+  const [caption, setCaption] = useState(initialIdea.caption ?? "");
   const [categoryId, setCategoryId] = useState(initialIdea.category_id);
   const [status, setStatus] = useState<IdeaStatus>(initialIdea.status);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-
-  // IA
-  const [aiBusy, setAiBusy] = useState<null | "categorize" | "rewrite">(null);
-  const [rewriteResult, setRewriteResult] = useState<RewriteResult | null>(
-    initialIdea.ai_caption || initialIdea.ai_hashtags?.length
-      ? {
-          title: initialIdea.title ?? "",
-          caption: initialIdea.ai_caption ?? "",
-          hashtags: initialIdea.ai_hashtags ?? [],
-        }
-      : null,
-  );
 
   const pushToast = useCallback((kind: Toast["kind"], message: string) => {
     const id = Date.now() + Math.random();
@@ -55,9 +48,24 @@ export function IdeaEditor({
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2500);
   }, []);
 
+  async function copyToClipboard(text: string, label: string) {
+    if (!text.trim()) {
+      pushToast("err", `${label} vide`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast("ok", `${label} copié 📋`);
+    } catch {
+      pushToast("err", "Copie impossible");
+    }
+  }
+
   const dirty =
     (title || null) !== (idea.title ?? null) ||
+    (hook || null) !== (idea.hook ?? null) ||
     content !== idea.content ||
+    (caption || null) !== (idea.caption ?? null) ||
     categoryId !== idea.category_id ||
     status !== idea.status;
 
@@ -67,7 +75,9 @@ export function IdeaEditor({
     try {
       const patch = {
         title: title.trim() || null,
+        hook: hook.trim() || null,
         content: content.trim(),
+        caption: caption.trim() || null,
         category_id: categoryId,
         status,
       };
@@ -103,63 +113,6 @@ export function IdeaEditor({
     }
   }
 
-  async function onAiCategorize() {
-    if (!content.trim() || categories.length === 0) return;
-    setAiBusy("categorize");
-    try {
-      const r = await aiCategorize(
-        content.trim(),
-        categories.map((c) => ({ id: c.id, name: c.name })),
-      );
-      if (r.category_id) {
-        setCategoryId(r.category_id);
-        const cat = categories.find((c) => c.id === r.category_id);
-        pushToast("ok", `Catégorie suggérée: ${cat?.name ?? "?"}`);
-      } else {
-        pushToast("err", "Aucune catégorie ne correspond vraiment");
-      }
-    } catch (e) {
-      pushToast("err", e instanceof Error ? e.message : "Erreur IA");
-    } finally {
-      setAiBusy(null);
-    }
-  }
-
-  async function onAiRewrite() {
-    if (!content.trim()) return;
-    setAiBusy("rewrite");
-    try {
-      const r = await aiRewrite(content.trim());
-      setRewriteResult(r);
-      try {
-        await queuedUpdateIdea(idea.id, {
-          ai_caption: r.caption,
-          ai_hashtags: r.hashtags,
-        });
-      } catch {
-        // pas grave si l'update fail (l'utilisatrice garde le résultat à l'écran)
-      }
-      pushToast("ok", "Reformulation prête ✨");
-    } catch (e) {
-      pushToast("err", e instanceof Error ? e.message : "Erreur IA");
-    } finally {
-      setAiBusy(null);
-    }
-  }
-
-  function applyRewriteTitle() {
-    if (rewriteResult?.title) setTitle(rewriteResult.title);
-  }
-
-  async function copyToClipboard(text: string, label: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      pushToast("ok", `${label} copié 📋`);
-    } catch {
-      pushToast("err", "Copie impossible");
-    }
-  }
-
   async function onDelete() {
     setBusy(true);
     try {
@@ -188,122 +141,51 @@ export function IdeaEditor({
         />
       </div>
 
+      {/* Hook */}
+      <FieldBlock
+        label="Hook"
+        value={hook}
+        onChange={setHook}
+        onCopy={() => copyToClipboard(hook, "Hook")}
+        rows={3}
+      />
+
       {/* Contenu */}
-      <div>
-        <label className="mb-1 block px-1 text-xs font-medium uppercase tracking-widest text-neutral-500">
-          Contenu
-        </label>
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={Math.max(6, Math.min(20, content.split("\n").length + 1))}
-          className="w-full resize-none rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-base outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-200 dark:border-neutral-800 dark:bg-neutral-900 dark:focus:border-neutral-600 dark:focus:ring-neutral-700"
-        />
-      </div>
+      <FieldBlock
+        label="Contenu"
+        value={content}
+        onChange={setContent}
+        onCopy={() => copyToClipboard(content, "Contenu")}
+        rows={Math.max(6, Math.min(20, content.split("\n").length + 1))}
+      />
 
-      {/* IA */}
-      <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-4 dark:border-neutral-800 dark:from-violet-950/30 dark:to-fuchsia-950/30">
-        <p className="mb-3 px-1 text-xs font-medium uppercase tracking-widest text-violet-700 dark:text-violet-400">
-          ✨ Assistant IA
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={onAiRewrite}
-            disabled={!content.trim() || aiBusy !== null}
-            className="inline-flex items-center gap-1.5 rounded-full border border-violet-300 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50 dark:border-violet-700 dark:bg-neutral-900 dark:text-violet-300 dark:hover:bg-violet-950/30"
-          >
-            {aiBusy === "rewrite" ? "…" : "✨ Reformuler en post Insta"}
-          </button>
-          <button
-            type="button"
-            onClick={onAiCategorize}
-            disabled={
-              !content.trim() || categories.length === 0 || aiBusy !== null
-            }
-            className="inline-flex items-center gap-1.5 rounded-full border border-violet-300 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50 dark:border-violet-700 dark:bg-neutral-900 dark:text-violet-300 dark:hover:bg-violet-950/30"
-          >
-            {aiBusy === "categorize" ? "…" : "🏷️ Suggérer une catégorie"}
-          </button>
-        </div>
+      {/* Caption */}
+      <FieldBlock
+        label="Caption"
+        value={caption}
+        onChange={setCaption}
+        onCopy={() => copyToClipboard(caption, "Caption")}
+        rows={4}
+      />
 
-        {rewriteResult ? (
-          <div className="mt-4 flex flex-col gap-3">
-            {/* Title suggestion */}
-            {rewriteResult.title ? (
-              <div className="rounded-xl border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900">
-                <p className="text-xs font-medium text-neutral-500">
-                  Titre suggéré
-                </p>
-                <p className="mt-1 text-sm font-medium">
-                  {rewriteResult.title}
-                </p>
-                <button
-                  type="button"
-                  onClick={applyRewriteTitle}
-                  className="mt-2 text-xs font-medium text-violet-700 underline underline-offset-4 hover:text-violet-900 dark:text-violet-400"
-                >
-                  Appliquer ce titre
-                </button>
-              </div>
-            ) : null}
-
-            {/* Caption */}
-            <div className="rounded-xl border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900">
-              <div className="flex items-start justify-between gap-2">
-                <p className="text-xs font-medium text-neutral-500">
-                  Caption
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    copyToClipboard(rewriteResult.caption, "Caption")
-                  }
-                  className="shrink-0 text-xs font-medium text-violet-700 underline underline-offset-4 dark:text-violet-400"
-                >
-                  Copier
-                </button>
-              </div>
-              <p className="mt-1 whitespace-pre-wrap text-sm">
-                {rewriteResult.caption}
-              </p>
-            </div>
-
-            {/* Hashtags */}
-            {rewriteResult.hashtags.length > 0 ? (
-              <div className="rounded-xl border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-xs font-medium text-neutral-500">
-                    Hashtags ({rewriteResult.hashtags.length})
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      copyToClipboard(
-                        rewriteResult.hashtags.map((h) => `#${h}`).join(" "),
-                        "Hashtags",
-                      )
-                    }
-                    className="shrink-0 text-xs font-medium text-violet-700 underline underline-offset-4 dark:text-violet-400"
-                  >
-                    Copier
-                  </button>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {rewriteResult.hashtags.map((h) => (
-                    <span
-                      key={h}
-                      className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800 dark:bg-violet-900/50 dark:text-violet-200"
-                    >
-                      #{h}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      {/* Tout copier */}
+      <button
+        type="button"
+        onClick={() => {
+          const all = [
+            hook.trim() && `${hook.trim()}`,
+            content.trim() && `${content.trim()}`,
+            caption.trim() && `${caption.trim()}`,
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+          void copyToClipboard(all, "Tout");
+        }}
+        disabled={!hook.trim() && !content.trim() && !caption.trim()}
+        className="self-end rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+      >
+        📋 Tout copier
+      </button>
 
       {/* Audio */}
       {audioMedia.length > 0 ? (
@@ -466,6 +348,44 @@ export function IdeaEditor({
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function FieldBlock({
+  label,
+  value,
+  onChange,
+  onCopy,
+  rows,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onCopy: () => void;
+  rows: number;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2 px-1">
+        <label className="text-xs font-medium uppercase tracking-widest text-neutral-500">
+          {label}
+        </label>
+        <button
+          type="button"
+          onClick={onCopy}
+          disabled={!value.trim()}
+          className="text-xs font-medium text-neutral-500 underline underline-offset-4 hover:text-neutral-900 disabled:opacity-40 disabled:no-underline dark:text-neutral-400 dark:hover:text-neutral-50"
+        >
+          Copier
+        </button>
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={rows}
+        className="w-full resize-none rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-base outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-200 dark:border-neutral-800 dark:bg-neutral-900 dark:focus:border-neutral-600 dark:focus:ring-neutral-700"
+      />
     </div>
   );
 }

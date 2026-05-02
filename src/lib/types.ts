@@ -6,7 +6,9 @@ export type Idea = {
   id: string;
   user_id: string;
   title: string | null;
+  hook: string | null;
   content: string;
+  caption: string | null;
   transcription_source: TranscriptionSource;
   category_id: string | null;
   status: IdeaStatus;
