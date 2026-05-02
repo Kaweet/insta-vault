@@ -173,12 +173,12 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
   const stopDictation = useCallback(async () => {
     speechStop();
 
-    // Commit la transcription finale dans le state `content`
-    // (sortie du mode dictation : displayedContent retombe sur content)
+    // Commit la transcription finale dans le state `content`.
+    // On inclut aussi interimTranscript : sur Safari iOS, la dernière phrase
+    // peut rester en "interim" si on stoppe vite après avoir parlé.
+    const transcript = speech.finalTranscript + speech.interimTranscript;
     const finalContent = (
-      baseText +
-      (baseText && speech.finalTranscript ? "\n" : "") +
-      speech.finalTranscript
+      baseText + (baseText && transcript ? "\n" : "") + transcript
     ).trim();
     setContent(finalContent);
     setIsDictationMode(false);
@@ -239,6 +239,7 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     recorderStop,
     speechStop,
     speech.finalTranscript,
+    speech.interimTranscript,
     ideaId,
     pushToast,
   ]);
