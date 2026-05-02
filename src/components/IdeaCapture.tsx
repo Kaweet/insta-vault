@@ -318,14 +318,26 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
           {charCount} car.
           {saveState === "saved" && !isDictating ? " · enregistré" : ""}
         </span>
-        <span className="truncate text-right text-amber-600 dark:text-amber-400">
+        <span
+          className={`truncate text-right ${
+            recorder.error || (speech.error && !isDictating)
+              ? "text-amber-600 dark:text-amber-400"
+              : ""
+          }`}
+        >
           {recorder.error
             ? `🎤 ${recorder.error}`
             : speech.error && !isDictating
               ? `🗣️ ${speech.error}`
-              : !speech.isSupported && recorder.isSupported
-                ? "Transcription indisponible sur ce navigateur (audio gardé)"
-                : ""}
+              : isDictating && speech.isListening
+                ? speech.finalTranscript || speech.interimTranscript
+                  ? `🗣️ Transcription en cours…`
+                  : `🗣️ En écoute…`
+                : isDictating && !speech.isSupported
+                  ? "🗣️ Transcription indispo (audio gardé)"
+                  : !speech.isSupported && !isDictating
+                    ? ""
+                    : ""}
         </span>
       </div>
 

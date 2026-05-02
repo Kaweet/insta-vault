@@ -91,10 +91,13 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         return;
       }
       const mimeType = recorder.mimeType;
-      recorder.onstop = () => {
+      let settled = false;
+
+      const finalize = () => {
+        if (settled) return;
+        settled = true;
         const durationMs = Date.now() - startedAtRef.current;
         const blob = new Blob(chunksRef.current, { type: mimeType });
-        // Cleanup tracks
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
         recorderRef.current = null;
@@ -102,11 +105,38 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         setIsRecording(false);
         resolve({ blob, mimeType, durationMs });
       };
+
+      recorder.onstop = finalize;
+
+      // Filet de sécurité : Safari iOS oublie parfois de fire onstop.
+      // Si rien n'arrive en 2s, on finalise avec ce qu'on a.
+      const safetyTimeout = setTimeout(() => {
+        if (!settled) finalize();
+      }, 2000);
+      // Nettoie le timeout si onstop arrive normalement
+      const originalOnStop = recorder.onstop;
+      recorder.onstop = (e: Event) => {
+        clearTimeout(safetyTimeout);
+        originalOnStop?.call(recorder, e);
+      };
+
       try {
-        recorder.stop();
+        // Force le flush du dernier chunk avant stop (Safari friendly)
+        if (recorder.state === "recording") {
+          try {
+            recorder.requestData();
+          } catch {
+            // ignore
+          }
+          recorder.stop();
+        } else {
+          // Déjà inactive : finalise direct
+          clearTimeout(safetyTimeout);
+          finalize();
+        }
       } catch {
-        setIsRecording(false);
-        resolve(null);
+        clearTimeout(safetyTimeout);
+        finalize();
       }
     });
   }, []);
