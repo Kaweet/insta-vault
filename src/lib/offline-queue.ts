@@ -163,7 +163,14 @@ export async function queuedCreateIdea(input: {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (!user) throw new Error("Non authentifié");
+      if (!user) {
+        // Auth introuvable côté client. Avant de bailout, vérifie réseau
+        // réel : si on est vraiment offline, on bascule en queue plutôt
+        // que d'erroriser l'utilisatrice.
+        const reachable = await isReallyOnline();
+        if (!reachable) throw new TypeError("offline");
+        throw new Error("Non authentifié");
+      }
 
       const { data, error } = await supabase
         .from("ideas")
