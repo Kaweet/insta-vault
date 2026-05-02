@@ -512,10 +512,24 @@ async function runOp(
   const supabase = createClient();
 
   if (op.kind === "create_idea") {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Non authentifié");
+    let user;
+    try {
+      const userResult = await withTimeout(
+        supabase.auth.getUser(),
+        5000,
+      );
+      user = userResult.data.user;
+    } catch (authErr) {
+      // Erreur réseau pendant l'auth : on retentera plus tard, op préservée
+      throw new TypeError(
+        authErr instanceof Error ? authErr.message : "auth network error",
+      );
+    }
+    if (!user) {
+      // Auth a répondu (pas d'erreur réseau) mais user null : session perdue.
+      // On garde l'op au lieu de la supprimer — on retentera après reconnexion.
+      throw new TypeError("auth session expired, will retry");
+    }
 
     const { data, error } = await supabase
       .from("ideas")

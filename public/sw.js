@@ -9,11 +9,14 @@
 // si offline, le fetch échoue silencieusement et la page affiche les seules
 // idées locales (pending) + un bandeau hors ligne.
 
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 const STATIC_CACHE = `insta-vault-static-${CACHE_VERSION}`;
 const SHELL_CACHE = `insta-vault-shell-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = ["/", "/ideas", "/categories"];
+
+// Routes dynamiques qu'on cache au moment du visit (pour offline ensuite)
+const DYNAMIC_SHELL_PREFIXES = ["/ideas/"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -95,19 +98,23 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Routes pré-cachées (navigations HTML uniquement) : stale-while-revalidate
-  const isShellRoute = PRECACHE_URLS.includes(url.pathname);
+  // Navigations HTML : on cache toutes les routes pré-cachées + dynamiques shell
   const isHtmlNavigation =
     req.mode === "navigate" ||
     req.headers.get("accept")?.includes("text/html");
 
-  if (isShellRoute && isHtmlNavigation) {
-    event.respondWith(staleWhileRevalidate(req, SHELL_CACHE));
-    return;
+  if (isHtmlNavigation) {
+    const isShellRoute = PRECACHE_URLS.includes(url.pathname);
+    const isDynamicShell = DYNAMIC_SHELL_PREFIXES.some((p) =>
+      url.pathname.startsWith(p),
+    );
+    if (isShellRoute || isDynamicShell) {
+      event.respondWith(staleWhileRevalidate(req, SHELL_CACHE));
+      return;
+    }
   }
 
-  // Autres pages (ex: /ideas/[id]) : pas de cache, browser parle direct au
-  // serveur. Offline → écran natif Safari (acceptable, on accède via la liste).
+  // Le reste : pas de cache, le browser parle direct au serveur.
 });
 
 async function cacheFirst(req, cacheName) {

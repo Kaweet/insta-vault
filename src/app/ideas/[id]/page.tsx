@@ -1,86 +1,13 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
-import { IdeaEditor } from "@/components/IdeaEditor";
-import { LocalIdeaEditor } from "@/components/LocalIdeaEditor";
-import { createClient } from "@/lib/supabase/server";
-import type { Category, Idea, Media } from "@/lib/types";
+import { IdeaDetailClient } from "@/components/IdeaDetailClient";
 
-export const dynamic = "force-dynamic";
-
+// Page client-only : pas de fetch SSR, donc fonctionne offline.
+// Le shell HTML est mis en cache par le service worker au premier visit
+// et chargé instantanément ensuite.
 export default async function IdeaDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const supabase = await createClient();
-
-  const isLocal = id.startsWith("local-");
-
-  // Pour les idées locales : on charge juste les catégories côté serveur,
-  // l'idée est dans IndexedDB et sera lue côté client.
-  if (isLocal) {
-    const { data: catData } = await supabase
-      .from("categories")
-      .select("*")
-      .order("name", { ascending: true });
-    const categories = (catData ?? []) as Category[];
-    return (
-      <main className="flex flex-1 flex-col gap-4 px-4 pb-24 pt-8">
-        <header className="mx-auto flex w-full max-w-2xl items-center justify-between">
-          <Link
-            href="/ideas"
-            className="text-sm font-medium text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-50"
-          >
-            ← Idées
-          </Link>
-          <h1 className="text-lg font-semibold tracking-tight">
-            ⏳ En attente
-          </h1>
-          <span className="w-12 text-right text-xs text-neutral-400" />
-        </header>
-        <LocalIdeaEditor ideaId={id} categories={categories} />
-      </main>
-    );
-  }
-
-  const [ideaRes, categoriesRes, mediaRes] = await Promise.all([
-    supabase.from("ideas").select("*").eq("id", id).maybeSingle(),
-    supabase.from("categories").select("*").order("name", { ascending: true }),
-    supabase
-      .from("media")
-      .select("*")
-      .eq("idea_id", id)
-      .eq("kind", "audio")
-      .order("created_at", { ascending: false }),
-  ]);
-
-  if (!ideaRes.data) notFound();
-
-  const idea = ideaRes.data as Idea;
-  const categories = (categoriesRes.data ?? []) as Category[];
-  const audioMedia = (mediaRes.data ?? []) as Media[];
-
-  return (
-    <main className="flex flex-1 flex-col gap-4 px-4 pb-24 pt-8">
-      <header className="mx-auto flex w-full max-w-2xl items-center justify-between">
-        <Link
-          href="/ideas"
-          className="text-sm font-medium text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-50"
-        >
-          ← Idées
-        </Link>
-        <h1 className="text-lg font-semibold tracking-tight">Édition</h1>
-        <span className="w-12 text-right text-xs text-neutral-400">
-          {idea.transcription_source === "audio" ? "🎤" : "✍️"}
-        </span>
-      </header>
-
-      <IdeaEditor
-        initialIdea={idea}
-        categories={categories}
-        audioMedia={audioMedia}
-      />
-    </main>
-  );
+  return <IdeaDetailClient ideaId={id} />;
 }

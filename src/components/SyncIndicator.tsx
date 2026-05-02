@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getPendingCount,
   isReallyOnline,
   subscribeQueue,
+  syncQueue,
 } from "@/lib/offline-queue";
 
 /**
@@ -54,21 +55,26 @@ export function SyncIndicator() {
     };
   }, []);
 
+  const onTap = useCallback(() => {
+    void syncQueue();
+  }, []);
+
   if (online && pending === 0) return null;
 
   const label = !online
     ? pending > 0
       ? `🔌 Hors ligne · ${pending} en attente`
       : "🔌 Hors ligne"
-    : `🔄 Sync ${pending}`;
+    : `🔄 ${pending} à sync · Toucher`;
 
   return (
-    <div
-      className="pointer-events-none fixed right-3 top-3 z-40 rounded-full bg-neutral-900/90 px-3 py-1 text-xs font-medium text-white shadow-lg backdrop-blur dark:bg-neutral-50/90 dark:text-neutral-900"
-      role="status"
+    <button
+      type="button"
+      onClick={onTap}
+      className="fixed right-3 top-3 z-40 rounded-full bg-neutral-900/90 px-3 py-1 text-xs font-medium text-white shadow-lg backdrop-blur active:scale-95 dark:bg-neutral-50/90 dark:text-neutral-900"
       aria-live="polite"
     >
       {label}
-    </div>
+    </button>
   );
 }

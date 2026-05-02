@@ -7,6 +7,7 @@ import {
   isReallyOnline,
   subscribeQueue,
   subscribeSynced,
+  syncQueue,
   type LocalIdea,
 } from "@/lib/offline-queue";
 import type { Category, Idea, IdeaStatus } from "@/lib/types";
@@ -36,15 +37,18 @@ export function IdeasList({
   const [recentlySynced, setRecentlySynced] = useState<Set<string>>(new Set());
   const [online, setOnline] = useState(true);
 
-  // Surveille l'état réseau pour griser les cartes Supabase quand offline
+  // Surveille l'état réseau pour griser les cartes Supabase quand offline.
+  // Tente aussi une sync au mount et à chaque retour online/visibilité.
   useEffect(() => {
-    const refresh = () => {
-      void isReallyOnline().then(setOnline);
+    const refresh = async () => {
+      const ok = await isReallyOnline();
+      setOnline(ok);
+      if (ok) void syncQueue();
     };
-    refresh();
+    void refresh();
     const interval = setInterval(refresh, 15_000);
     const onVisible = () => {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
