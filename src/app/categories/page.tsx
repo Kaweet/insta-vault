@@ -1,4 +1,5 @@
 import { CategoriesManager } from "@/components/CategoriesManager";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { createClient } from "@/lib/supabase/server";
 import type { Category } from "@/lib/types";
 
@@ -24,6 +25,7 @@ export default async function CategoriesPage() {
         </p>
       </header>
 
+      <OfflineBanner />
       <CategoriesManager initialCategories={categories} />
     </main>
   );

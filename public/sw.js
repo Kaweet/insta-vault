@@ -1,22 +1,43 @@
-// Insta Vault — Service Worker minimaliste
-// Stratégie : on ne cache QUE les assets statiques (JS/CSS/icons).
-// Tout le reste (pages HTML, RSC, API, auth) bypass le SW pour préserver
-// les cookies et éviter de servir des réponses obsolètes.
-// Le bénéfice principal : permettre l'installation PWA et accélérer les
-// chargements répétés des assets statiques.
+// Insta Vault — Service Worker offline-first
+// Stratégie :
+// - Précache les routes principales (/, /ideas, /categories) à l'install
+// - Stale-while-revalidate pour ces routes (cache d'abord, réseau en arrière-plan)
+// - Cache-first pour les assets statiques
+// - Bypass complet pour /api/*, /auth/*, et les requêtes Supabase
+//
+// Les data Supabase (liste d'idées etc.) sont toujours fetchées en réseau :
+// si offline, le fetch échoue silencieusement et la page affiche les seules
+// idées locales (pending) + un bandeau hors ligne.
 
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const STATIC_CACHE = `insta-vault-static-${CACHE_VERSION}`;
 const SHELL_CACHE = `insta-vault-shell-${CACHE_VERSION}`;
 
+const PRECACHE_URLS = ["/", "/ideas", "/categories"];
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      // Précache best-effort : si un fetch fail, on ne bloque pas l'install
+      await Promise.all(
+        PRECACHE_URLS.map(async (url) => {
+          try {
+            const res = await fetch(url, { credentials: "include" });
+            if (res.ok) await cache.put(url, res);
+          } catch {
+            // ignore
+          }
+        }),
+      );
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // Nettoyer les anciens caches
       const keys = await caches.keys();
       await Promise.all(
         keys
@@ -37,10 +58,32 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Ne traite que GET et same-origin
-  if (req.method !== "GET" || url.origin !== self.location.origin) return;
+  // Ne traite que GET
+  if (req.method !== "GET") return;
 
-  // Assets statiques Next : cache-first (sûrs, pas d'auth)
+  // Bypass requêtes externes (Supabase notamment) : data toujours réseau
+  if (url.origin !== self.location.origin) return;
+
+  // Bypass /api/* et /auth/*
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/auth/")
+  ) {
+    return;
+  }
+
+  // Bypass les fetches RSC (navigation client-side Next.js).
+  // Ils contiennent des données live qu'on ne veut PAS cacher.
+  if (
+    url.search.includes("_rsc=") ||
+    req.headers.get("RSC") ||
+    req.headers.get("Next-Router-State-Tree") ||
+    req.headers.get("Next-Router-Prefetch")
+  ) {
+    return;
+  }
+
+  // Assets statiques Next : cache-first
   if (
     url.pathname.startsWith("/_next/static/") ||
     url.pathname.startsWith("/icon") ||
@@ -52,25 +95,19 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Page d'accueil "/" : stale-while-revalidate pour permettre l'ouverture
-  // offline (mode avion). On exclut les RSC fetches (Next-Router-*) qui
-  // doivent rester directs pour préserver l'auth.
-  const isHomeNavigation =
-    url.pathname === "/" &&
-    !url.search.includes("_rsc=") &&
-    !req.headers.get("RSC") &&
-    !req.headers.get("Next-Router-State-Tree") &&
-    !req.headers.get("Next-Router-Prefetch") &&
-    (req.mode === "navigate" ||
-      req.headers.get("accept")?.includes("text/html"));
+  // Routes pré-cachées (navigations HTML uniquement) : stale-while-revalidate
+  const isShellRoute = PRECACHE_URLS.includes(url.pathname);
+  const isHtmlNavigation =
+    req.mode === "navigate" ||
+    req.headers.get("accept")?.includes("text/html");
 
-  if (isHomeNavigation) {
+  if (isShellRoute && isHtmlNavigation) {
     event.respondWith(staleWhileRevalidate(req, SHELL_CACHE));
     return;
   }
 
-  // Pour tout le reste : on ne touche pas.
-  // Le browser parle directement au serveur, cookies préservés.
+  // Autres pages (ex: /ideas/[id]) : pas de cache, browser parle direct au
+  // serveur. Offline → écran natif Safari (acceptable, on accède via la liste).
 });
 
 async function cacheFirst(req, cacheName) {
@@ -86,11 +123,6 @@ async function cacheFirst(req, cacheName) {
   }
 }
 
-/**
- * Sert le cache immédiatement si dispo (rapide + offline-friendly), met à
- * jour le cache en arrière-plan via le réseau. Si pas de cache ET pas de
- * réseau, on retourne une erreur (Safari affichera son écran natif).
- */
 async function staleWhileRevalidate(req, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(req);
@@ -102,13 +134,9 @@ async function staleWhileRevalidate(req, cacheName) {
     .catch(() => null);
 
   if (cached) {
-    // Sert le cache, met à jour en background
-    networkPromise.catch(() => {
-      // ignore
-    });
+    networkPromise.catch(() => {});
     return cached;
   }
-  // Pas de cache : on attend le réseau
   const fresh = await networkPromise;
   return fresh || Response.error();
 }

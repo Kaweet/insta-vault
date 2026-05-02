@@ -1,4 +1,5 @@
 import { IdeasList } from "@/components/IdeasList";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { createClient } from "@/lib/supabase/server";
 import type { Category, Idea } from "@/lib/types";
 
@@ -27,6 +28,7 @@ export default async function IdeasPage() {
         </p>
       </header>
 
+      <OfflineBanner />
       <IdeasList initialIdeas={ideas} categories={categories} />
     </main>
   );

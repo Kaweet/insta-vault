@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { BottomNav } from "@/components/BottomNav";
 import { OfflineSyncBoot } from "@/components/OfflineSyncBoot";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
+import { SyncedToast } from "@/components/SyncedToast";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { TopProgress } from "@/components/TopProgress";
 import "./globals.css";
@@ -51,6 +52,7 @@ export default function RootLayout({
         <OfflineSyncBoot />
         <TopProgress />
         <SyncIndicator />
+        <SyncedToast />
         {children}
         <BottomNav />
       </body>

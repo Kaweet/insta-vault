@@ -121,20 +121,23 @@ export async function isReallyOnline(): Promise<boolean> {
     return lastPingResult;
   }
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!url) {
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
     return typeof navigator !== "undefined" ? navigator.onLine : true;
   }
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
-    // /auth/v1/health ne nécessite pas d'auth et est ultra-léger
+    // /auth/v1/health avec l'apikey (Supabase l'exige même pour le health)
     const res = await fetch(`${url}/auth/v1/health`, {
       method: "GET",
       cache: "no-store",
       signal: controller.signal,
+      headers: { apikey: anonKey },
     });
     clearTimeout(timeout);
-    lastPingResult = res.ok || res.status < 500;
+    // Tout code < 500 = serveur joignable = on est online
+    lastPingResult = res.status < 500;
   } catch {
     lastPingResult = false;
   }
@@ -372,11 +375,40 @@ export async function getLocalPendingIdeas(): Promise<LocalIdea[]> {
 let isSyncing = false;
 const queueListeners = new Set<() => void>();
 
+/** Événements de sync émis quand une idée pending devient syncée. */
+export type SyncedIdeaEvent = {
+  /** id Supabase de l'idée maintenant en DB */
+  realId: string;
+  /** id local d'origine (si l'idée a été créée offline) */
+  localId?: string;
+  at: number;
+};
+const syncedListeners = new Set<(e: SyncedIdeaEvent) => void>();
+
 export function subscribeQueue(listener: () => void): () => void {
   queueListeners.add(listener);
   return () => {
     queueListeners.delete(listener);
   };
+}
+
+export function subscribeSynced(
+  listener: (e: SyncedIdeaEvent) => void,
+): () => void {
+  syncedListeners.add(listener);
+  return () => {
+    syncedListeners.delete(listener);
+  };
+}
+
+function notifySynced(e: SyncedIdeaEvent) {
+  syncedListeners.forEach((l) => {
+    try {
+      l(e);
+    } catch {
+      // ignore
+    }
+  });
 }
 
 function notifyQueueChange() {
@@ -460,6 +492,11 @@ async function runOp(
     if (error) throw error;
     const realIdea = data as Idea;
     idMap.set(op.payload.localId, realIdea.id);
+    notifySynced({
+      realId: realIdea.id,
+      localId: op.payload.localId,
+      at: Date.now(),
+    });
 
     if (op.payload.audioRef) {
       const audio = await getItem<LocalAudio>(

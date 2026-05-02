@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getLocalPendingIdeas,
   subscribeQueue,
+  subscribeSynced,
   type LocalIdea,
 } from "@/lib/offline-queue";
 import type { Category, Idea, IdeaStatus } from "@/lib/types";
@@ -31,6 +32,7 @@ export function IdeasList({
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [pendingLocal, setPendingLocal] = useState<LocalIdea[]>([]);
+  const [recentlySynced, setRecentlySynced] = useState<Set<string>>(new Set());
 
   // Charge les idées pending locales et s'abonne aux changements de la queue
   useEffect(() => {
@@ -39,6 +41,24 @@ export function IdeasList({
     };
     refresh();
     return subscribeQueue(refresh);
+  }, []);
+
+  // Track les idées fraîchement sync pour afficher un ✓ vert ~10s
+  useEffect(() => {
+    return subscribeSynced((e) => {
+      setRecentlySynced((prev) => {
+        const next = new Set(prev);
+        next.add(e.realId);
+        return next;
+      });
+      setTimeout(() => {
+        setRecentlySynced((prev) => {
+          const next = new Set(prev);
+          next.delete(e.realId);
+          return next;
+        });
+      }, 10_000);
+    });
   }, []);
 
   // Combine pending (en tête, plus récent) + idées DB. Dédoublonne par id.
@@ -145,9 +165,17 @@ export function IdeasList({
 
       {/* Content */}
       {view === "list" ? (
-        <ListView ideas={filtered} categoryById={categoryById} />
+        <ListView
+          ideas={filtered}
+          categoryById={categoryById}
+          recentlySynced={recentlySynced}
+        />
       ) : (
-        <KanbanView ideas={filtered} categoryById={categoryById} />
+        <KanbanView
+          ideas={filtered}
+          categoryById={categoryById}
+          recentlySynced={recentlySynced}
+        />
       )}
     </div>
   );
@@ -212,9 +240,11 @@ function FilterPill({
 function ListView({
   ideas,
   categoryById,
+  recentlySynced,
 }: {
   ideas: (Idea | LocalIdea)[];
   categoryById: Map<string, Category>;
+  recentlySynced: Set<string>;
 }) {
   if (ideas.length === 0) {
     return (
@@ -232,6 +262,7 @@ function ListView({
           category={
             idea.category_id ? categoryById.get(idea.category_id) : undefined
           }
+          justSynced={recentlySynced.has(idea.id)}
         />
       ))}
     </ul>
@@ -241,9 +272,11 @@ function ListView({
 function KanbanView({
   ideas,
   categoryById,
+  recentlySynced,
 }: {
   ideas: (Idea | LocalIdea)[];
   categoryById: Map<string, Category>;
+  recentlySynced: Set<string>;
 }) {
   const grouped: Record<IdeaStatus, (Idea | LocalIdea)[]> = {
     draft: [],
@@ -275,6 +308,7 @@ function KanbanView({
                       : undefined
                   }
                   compact
+                  justSynced={recentlySynced.has(idea.id)}
                 />
               ))
             )}
@@ -289,10 +323,12 @@ function IdeaCard({
   idea,
   category,
   compact = false,
+  justSynced = false,
 }: {
   idea: Idea | LocalIdea;
   category?: Category;
   compact?: boolean;
+  justSynced?: boolean;
 }) {
   const isPending = "_pending" in idea && idea._pending === true;
   const innerContent = (
@@ -319,6 +355,13 @@ function IdeaCard({
         {isPending ? (
           <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
             ⏳ En attente
+          </span>
+        ) : justSynced ? (
+          <span
+            title="Synchronisée à l'instant"
+            className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+          >
+            ✓ Synchronisée
           </span>
         ) : null}
       </div>
