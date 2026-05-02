@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { saveIdea, uploadAudioForIdea } from "@/lib/ideas";
+import {
+  queuedCreateIdea,
+  queuedUpdateIdea,
+} from "@/lib/offline-queue";
 import { useAudioRecorder } from "@/lib/useAudioRecorder";
 import { useSpeechRecognition } from "@/lib/useSpeechRecognition";
 
@@ -28,7 +31,6 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
   // Texte présent au démarrage de la dictée — ré-injecté en préfixe pendant.
   const [baseText, setBaseText] = useState("");
   const [isDictationMode, setIsDictationMode] = useState(false);
-  const pendingAudioRef = useRef<Promise<void> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -61,16 +63,28 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
       if (!trimmed) return false;
       setSaveState("saving");
       try {
-        const { idea } = await saveIdea({
-          id: ideaId ?? undefined,
-          content: trimmed,
-          transcriptionSource,
-        });
-        const wasNew = !ideaId;
-        setIdeaId(idea.id);
-        setSaveState("saved");
-        if (wasNew) setCount((c) => c + 1);
-        if (!opts.silent) pushToast("ok", "Idée enregistrée ✓");
+        if (ideaId) {
+          await queuedUpdateIdea(ideaId, {
+            content: trimmed,
+          });
+          setSaveState("saved");
+          if (!opts.silent) pushToast("ok", "Idée enregistrée ✓");
+        } else {
+          const idea = await queuedCreateIdea({
+            content: trimmed,
+            transcriptionSource,
+          });
+          setIdeaId(idea.id);
+          setSaveState("saved");
+          setCount((c) => c + 1);
+          if (!opts.silent) {
+            const offlineHint =
+              typeof navigator !== "undefined" && !navigator.onLine
+                ? " (en attente)"
+                : "";
+            pushToast("ok", `Idée enregistrée ✓${offlineHint}`);
+          }
+        }
         return true;
       } catch (e) {
         setSaveState("error");
@@ -188,47 +202,44 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
     const audio = await recorderStop();
     if (!audio) return;
 
-    // On a besoin d'un ideaId pour lier l'audio. On sauve d'abord l'idée.
     setSaveState("saving");
     try {
-      if (!finalContent && !ideaId) {
-        // Pas de texte ET pas d'idée existante : on crée quand même pour
-        // attacher l'audio (l'utilisatrice pourra réécouter et écrire après).
-        const { idea } = await saveIdea({
-          content: "",
+      if (!ideaId) {
+        // Nouvelle idée : queuedCreate gère insert + upload audio (online ou queue)
+        const idea = await queuedCreateIdea({
+          content: finalContent,
           transcriptionSource: "audio",
+          audio: {
+            blob: audio.blob,
+            mimeType: audio.mimeType,
+            durationMs: audio.durationMs,
+          },
         });
         setIdeaId(idea.id);
         setCount((c) => c + 1);
-        pendingAudioRef.current = uploadAudioForIdea(idea.id, audio);
-      } else if (ideaId) {
-        // Update du contenu et upload audio en parallèle
-        await saveIdea({
-          id: ideaId,
-          content: finalContent,
-          transcriptionSource: "audio",
-        });
-        pendingAudioRef.current = uploadAudioForIdea(ideaId, audio);
       } else {
-        // Nouvelle idée + upload audio
-        const { idea } = await saveIdea({
+        // Idée existante : update content + tente upload audio
+        await queuedUpdateIdea(ideaId, {
           content: finalContent,
-          transcriptionSource: "audio",
         });
-        setIdeaId(idea.id);
-        setCount((c) => c + 1);
-        pendingAudioRef.current = uploadAudioForIdea(idea.id, audio);
+        // Pour l'audio sur idée existante : si online on tente direct,
+        // si fail réseau queuedCreateIdea-like behavior n'est pas dispo.
+        // Fallback simple : tente l'upload, ignore l'erreur sinon (pas idéal
+        // mais le cas est rare : créer une idée à partir d'un texte tapé,
+        // PUIS dicter par-dessus avec réseau qui tombe juste à ce moment).
+        try {
+          const { uploadAudioForIdea } = await import("@/lib/ideas");
+          await uploadAudioForIdea(ideaId, audio);
+        } catch {
+          pushToast("err", "Audio non uploadé (réessaie plus tard)");
+        }
       }
       setSaveState("saved");
-      pushToast("ok", "Audio enregistré, upload en cours…");
-
-      // Attendre la fin de l'upload pour informer de la complétion
-      try {
-        await pendingAudioRef.current;
-        pushToast("ok", "Audio sauvegardé ✓");
-      } catch {
-        pushToast("err", "Upload audio échoué");
-      }
+      const offlineHint =
+        typeof navigator !== "undefined" && !navigator.onLine
+          ? " (en attente)"
+          : "";
+      pushToast("ok", `Audio enregistré ✓${offlineHint}`);
     } catch (e) {
       setSaveState("error");
       pushToast("err", e instanceof Error ? e.message : "Erreur");

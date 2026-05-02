@@ -4,7 +4,10 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { aiCategorize, aiRewrite, type RewriteResult } from "@/lib/ai";
-import { deleteIdea, updateIdea } from "@/lib/ideas";
+import {
+  queuedDeleteIdea,
+  queuedUpdateIdea,
+} from "@/lib/offline-queue";
 import type { Category, Idea, IdeaStatus, Media } from "@/lib/types";
 
 const STATUS_LABELS: Record<IdeaStatus, string> = {
@@ -62,14 +65,24 @@ export function IdeaEditor({
     if (!dirty) return;
     setBusy(true);
     try {
-      const updated = await updateIdea(idea.id, {
+      const patch = {
         title: title.trim() || null,
         content: content.trim(),
         category_id: categoryId,
         status,
-      });
-      setIdea(updated);
-      pushToast("ok", "Idée enregistrée ✓");
+      };
+      await queuedUpdateIdea(idea.id, patch);
+      // Update local optimiste pour que `dirty` repasse à false
+      setIdea((prev) => ({
+        ...prev,
+        ...patch,
+        updated_at: new Date().toISOString(),
+      }));
+      const offlineHint =
+        typeof navigator !== "undefined" && !navigator.onLine
+          ? " (en attente)"
+          : "";
+      pushToast("ok", `Idée enregistrée ✓${offlineHint}`);
     } catch (e) {
       pushToast("err", e instanceof Error ? e.message : "Erreur");
     } finally {
@@ -82,8 +95,8 @@ export function IdeaEditor({
     setStatus(newStatus);
     if (newStatus === idea.status) return;
     try {
-      const updated = await updateIdea(idea.id, { status: newStatus });
-      setIdea(updated);
+      await queuedUpdateIdea(idea.id, { status: newStatus });
+      setIdea((prev) => ({ ...prev, status: newStatus }));
       pushToast("ok", `Statut: ${STATUS_LABELS[newStatus]}`);
     } catch (e) {
       pushToast("err", e instanceof Error ? e.message : "Erreur");
@@ -118,12 +131,11 @@ export function IdeaEditor({
     try {
       const r = await aiRewrite(content.trim());
       setRewriteResult(r);
-      // Sauve directement le résultat dans la DB pour persister entre rechargements
       try {
-        await updateIdea(idea.id, {
+        await queuedUpdateIdea(idea.id, {
           ai_caption: r.caption,
           ai_hashtags: r.hashtags,
-        } as never);
+        });
       } catch {
         // pas grave si l'update fail (l'utilisatrice garde le résultat à l'écran)
       }
@@ -151,7 +163,7 @@ export function IdeaEditor({
   async function onDelete() {
     setBusy(true);
     try {
-      await deleteIdea(idea.id);
+      await queuedDeleteIdea(idea.id);
       router.push("/ideas");
     } catch (e) {
       pushToast("err", e instanceof Error ? e.message : "Erreur");

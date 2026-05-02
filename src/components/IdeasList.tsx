@@ -1,7 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  getLocalPendingIdeas,
+  subscribeQueue,
+  type LocalIdea,
+} from "@/lib/offline-queue";
 import type { Category, Idea, IdeaStatus } from "@/lib/types";
 
 const STATUS_LABELS: Record<IdeaStatus, string> = {
@@ -25,6 +30,35 @@ export function IdeasList({
   const [view, setView] = useState<View>("list");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [pendingLocal, setPendingLocal] = useState<LocalIdea[]>([]);
+
+  // Charge les idées pending locales et s'abonne aux changements de la queue
+  useEffect(() => {
+    const refresh = () => {
+      void getLocalPendingIdeas().then(setPendingLocal);
+    };
+    refresh();
+    return subscribeQueue(refresh);
+  }, []);
+
+  // Combine pending (en tête, plus récent) + idées DB. Dédoublonne par id.
+  const allIdeas = useMemo(() => {
+    const seen = new Set<string>();
+    const combined: (Idea | LocalIdea)[] = [];
+    for (const i of pendingLocal) {
+      if (!seen.has(i.id)) {
+        combined.push(i);
+        seen.add(i.id);
+      }
+    }
+    for (const i of initialIdeas) {
+      if (!seen.has(i.id)) {
+        combined.push(i);
+        seen.add(i.id);
+      }
+    }
+    return combined;
+  }, [pendingLocal, initialIdeas]);
 
   const categoryById = useMemo(
     () => new Map(categories.map((c) => [c.id, c])),
@@ -32,7 +66,7 @@ export function IdeasList({
   );
 
   const filtered = useMemo(() => {
-    return initialIdeas.filter((idea) => {
+    return allIdeas.filter((idea) => {
       if (categoryFilter === "none" && idea.category_id !== null) return false;
       if (
         categoryFilter !== "all" &&
@@ -43,7 +77,7 @@ export function IdeasList({
       if (statusFilter !== "all" && idea.status !== statusFilter) return false;
       return true;
     });
-  }, [initialIdeas, categoryFilter, statusFilter]);
+  }, [allIdeas, categoryFilter, statusFilter]);
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
@@ -58,7 +92,7 @@ export function IdeasList({
           </ViewBtn>
         </div>
         <span className="text-xs text-neutral-400">
-          {filtered.length} / {initialIdeas.length}
+          {filtered.length} / {allIdeas.length}
         </span>
       </div>
 
@@ -179,7 +213,7 @@ function ListView({
   ideas,
   categoryById,
 }: {
-  ideas: Idea[];
+  ideas: (Idea | LocalIdea)[];
   categoryById: Map<string, Category>;
 }) {
   if (ideas.length === 0) {
@@ -208,10 +242,10 @@ function KanbanView({
   ideas,
   categoryById,
 }: {
-  ideas: Idea[];
+  ideas: (Idea | LocalIdea)[];
   categoryById: Map<string, Category>;
 }) {
-  const grouped: Record<IdeaStatus, Idea[]> = {
+  const grouped: Record<IdeaStatus, (Idea | LocalIdea)[]> = {
     draft: [],
     preparing: [],
     published: [],
@@ -256,54 +290,81 @@ function IdeaCard({
   category,
   compact = false,
 }: {
-  idea: Idea;
+  idea: Idea | LocalIdea;
   category?: Category;
   compact?: boolean;
 }) {
+  const isPending = "_pending" in idea && idea._pending === true;
+  const innerContent = (
+    <>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          {idea.title ? (
+            <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {idea.title}
+            </p>
+          ) : null}
+          <p
+            className={`whitespace-pre-wrap text-sm text-neutral-700 dark:text-neutral-300 ${
+              compact ? "line-clamp-2" : "line-clamp-3"
+            }`}
+          >
+            {idea.content || (
+              <span className="italic text-neutral-400">
+                (audio sans transcription)
+              </span>
+            )}
+          </p>
+        </div>
+        {isPending ? (
+          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+            ⏳ En attente
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-400">
+        <div className="flex items-center gap-2">
+          {category ? (
+            <span
+              className="flex items-center gap-1"
+              style={{ color: category.color ?? "#6b7280" }}
+            >
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: category.color ?? "#6b7280" }}
+              />
+              {category.name}
+            </span>
+          ) : null}
+          <span>{idea.transcription_source === "audio" ? "🎤" : "✍️"}</span>
+        </div>
+        <span className="shrink-0">
+          {new Date(idea.created_at).toLocaleString("fr-FR", {
+            dateStyle: "short",
+          })}
+        </span>
+      </div>
+    </>
+  );
+
+  // Idée locale pas encore syncée : pas de lien (404 sinon)
+  if (isPending) {
+    return (
+      <li className="list-none">
+        <div className="block rounded-2xl border border-amber-200 bg-amber-50/50 px-4 py-3 opacity-90 dark:border-amber-900/50 dark:bg-amber-950/20">
+          {innerContent}
+        </div>
+      </li>
+    );
+  }
+
   return (
     <li className="list-none">
       <Link
         href={`/ideas/${idea.id}`}
         className="block rounded-2xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700 dark:hover:bg-neutral-800"
       >
-        {idea.title ? (
-          <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-            {idea.title}
-          </p>
-        ) : null}
-        <p
-          className={`whitespace-pre-wrap text-sm text-neutral-700 dark:text-neutral-300 ${
-            compact ? "line-clamp-2" : "line-clamp-3"
-          }`}
-        >
-          {idea.content || (
-            <span className="italic text-neutral-400">
-              (audio sans transcription)
-            </span>
-          )}
-        </p>
-        <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-400">
-          <div className="flex items-center gap-2">
-            {category ? (
-              <span
-                className="flex items-center gap-1"
-                style={{ color: category.color ?? "#6b7280" }}
-              >
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: category.color ?? "#6b7280" }}
-                />
-                {category.name}
-              </span>
-            ) : null}
-            <span>{idea.transcription_source === "audio" ? "🎤" : "✍️"}</span>
-          </div>
-          <span className="shrink-0">
-            {new Date(idea.created_at).toLocaleString("fr-FR", {
-              dateStyle: "short",
-            })}
-          </span>
-        </div>
+        {innerContent}
       </Link>
     </li>
   );

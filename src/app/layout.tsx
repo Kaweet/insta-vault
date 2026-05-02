@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { BottomNav } from "@/components/BottomNav";
+import { OfflineSyncBoot } from "@/components/OfflineSyncBoot";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
+import { SyncIndicator } from "@/components/SyncIndicator";
 import { TopProgress } from "@/components/TopProgress";
 import "./globals.css";
 
@@ -46,7 +48,9 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col pb-16">
         <ServiceWorkerRegistration />
+        <OfflineSyncBoot />
         <TopProgress />
+        <SyncIndicator />
         {children}
         <BottomNav />
       </body>
