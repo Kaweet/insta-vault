@@ -101,3 +101,51 @@ export async function countIdeas(): Promise<number> {
   if (error) throw error;
   return count ?? 0;
 }
+
+/** Met à jour le contenu d'une idée. */
+export async function updateIdeaContent(
+  ideaId: string,
+  content: string,
+): Promise<Idea> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("ideas")
+    .update({ content })
+    .eq("id", ideaId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as Idea;
+}
+
+/**
+ * Supprime une idée et tous ses fichiers audio dans le Storage.
+ * La RLS supprime en cascade les lignes media via FK.
+ */
+export async function deleteIdea(ideaId: string): Promise<void> {
+  const supabase = createClient();
+
+  // Récupérer les paths audio liés à cette idée pour les supprimer du Storage
+  const { data: mediaRows, error: mediaErr } = await supabase
+    .from("media")
+    .select("storage_path")
+    .eq("idea_id", ideaId)
+    .eq("kind", "audio");
+  if (mediaErr) throw mediaErr;
+
+  const paths = (mediaRows ?? [])
+    .map((m: { storage_path: string | null }) => m.storage_path)
+    .filter((p): p is string => p !== null);
+
+  if (paths.length > 0) {
+    // remove() ignore les fichiers manquants, donc safe
+    const { error: storageErr } = await supabase.storage
+      .from("insta-vault-audio")
+      .remove(paths);
+    if (storageErr) throw storageErr;
+  }
+
+  // La FK ON DELETE CASCADE supprime aussi les lignes media
+  const { error } = await supabase.from("ideas").delete().eq("id", ideaId);
+  if (error) throw error;
+}

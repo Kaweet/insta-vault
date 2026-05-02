@@ -42,23 +42,27 @@ export function useAudioRecorder(): UseAudioRecorderResult {
   const [isRecording, setIsRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Détection optimiste : si getUserMedia + MediaRecorder existent, on tente.
+  // (isTypeSupported ment sur Safari, on laissera MediaRecorder choisir son défaut.)
   const isSupported =
     typeof window !== "undefined" &&
     typeof navigator?.mediaDevices?.getUserMedia === "function" &&
-    typeof MediaRecorder !== "undefined" &&
-    pickSupportedMimeType() !== null;
+    typeof MediaRecorder !== "undefined";
 
   const start = useCallback(async (): Promise<boolean> => {
     setError(null);
-    const mimeType = pickSupportedMimeType();
-    if (!mimeType) {
-      setError("Enregistrement audio non supporté");
+    if (typeof MediaRecorder === "undefined") {
+      setError("Enregistrement audio non supporté par ce navigateur");
       return false;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const mimeType = pickSupportedMimeType();
+      // Si aucun mime explicite n'est supporté, on laisse le browser choisir
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
@@ -69,11 +73,12 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       setIsRecording(true);
       return true;
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "Permission micro refusée ou indisponible",
-      );
+      // Cleanup si le stream a été acquis avant l'erreur
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      const msg =
+        e instanceof Error ? e.message : "Permission micro refusée";
+      setError(msg);
       return false;
     }
   }, []);

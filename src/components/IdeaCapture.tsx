@@ -289,8 +289,7 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
           <button
             type="button"
             onClick={startDictation}
-            className="inline-flex h-12 flex-1 min-w-[140px] items-center justify-center gap-2 rounded-full border border-neutral-200 bg-white px-5 text-sm font-medium text-neutral-900 shadow-sm transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:hover:bg-neutral-800"
-            disabled={!speech.isSupported && !recorder.isSupported}
+            className="inline-flex h-12 flex-1 min-w-[140px] items-center justify-center gap-2 rounded-full border border-neutral-200 bg-white px-5 text-sm font-medium text-neutral-900 shadow-sm transition hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:hover:bg-neutral-800"
           >
             🎤 Dicter
           </button>
@@ -314,21 +313,20 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
       </div>
 
       {/* Status line */}
-      <div className="flex items-center justify-between px-2 text-xs text-neutral-500 dark:text-neutral-400">
-        <span>
+      <div className="flex items-center justify-between gap-3 px-2 text-xs text-neutral-500 dark:text-neutral-400">
+        <span className="shrink-0">
           {charCount} car.
           {saveState === "saved" && !isDictating ? " · enregistré" : ""}
         </span>
-        {!speech.isSupported && recorder.isSupported ? (
-          <span className="text-amber-600 dark:text-amber-400">
-            Transcription indisponible (audio quand même gardé)
-          </span>
-        ) : null}
-        {speech.error && !isDictating ? (
-          <span className="text-amber-600 dark:text-amber-400">
-            {speech.error}
-          </span>
-        ) : null}
+        <span className="truncate text-right text-amber-600 dark:text-amber-400">
+          {recorder.error
+            ? `🎤 ${recorder.error}`
+            : speech.error && !isDictating
+              ? `🗣️ ${speech.error}`
+              : !speech.isSupported && recorder.isSupported
+                ? "Transcription indisponible sur ce navigateur (audio gardé)"
+                : ""}
+        </span>
       </div>
 
       <a
