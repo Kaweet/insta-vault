@@ -49,6 +49,13 @@ export async function updateSession(request: NextRequest) {
   const isPublic = PUBLIC_PATHS.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),
   );
+  const isApi = pathname.startsWith("/api/");
+
+  // Pour /api/*, on ne redirige jamais : les routes gèrent leur propre 401/403
+  // (avec requireAllowedUser). On laisse juste passer la session refresh.
+  if (isApi) {
+    return response;
+  }
 
   // Pas connecté + page protégée → redirect vers /login
   if (!user && !isPublic) {
