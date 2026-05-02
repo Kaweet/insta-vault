@@ -1,211 +1,310 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { deleteIdea, updateIdeaContent } from "@/lib/ideas";
-import type { Idea } from "@/lib/types";
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import type { Category, Idea, IdeaStatus } from "@/lib/types";
 
-type Toast = { id: number; kind: "ok" | "err"; message: string };
+const STATUS_LABELS: Record<IdeaStatus, string> = {
+  draft: "Brouillon",
+  preparing: "En préparation",
+  published: "Publiée",
+};
+const STATUS_ORDER: IdeaStatus[] = ["draft", "preparing", "published"];
 
-export function IdeasList({ initialIdeas }: { initialIdeas: Idea[] }) {
-  const [ideas, setIdeas] = useState(initialIdeas);
-  const [toasts, setToasts] = useState<Toast[]>([]);
+type View = "list" | "kanban";
+type CategoryFilter = "all" | "none" | string; // "all", "none", or category id
+type StatusFilter = "all" | IdeaStatus;
 
-  const pushToast = useCallback((kind: Toast["kind"], message: string) => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, kind, message }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2500);
-  }, []);
+export function IdeasList({
+  initialIdeas,
+  categories,
+}: {
+  initialIdeas: Idea[];
+  categories: Category[];
+}) {
+  const [view, setView] = useState<View>("list");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  async function handleSaveEdit(idea: Idea, newContent: string) {
-    try {
-      const updated = await updateIdeaContent(idea.id, newContent.trim());
-      setIdeas((prev) =>
-        prev.map((i) => (i.id === idea.id ? updated : i)),
-      );
-      pushToast("ok", "Idée modifiée ✓");
+  const categoryById = useMemo(
+    () => new Map(categories.map((c) => [c.id, c])),
+    [categories],
+  );
+
+  const filtered = useMemo(() => {
+    return initialIdeas.filter((idea) => {
+      if (categoryFilter === "none" && idea.category_id !== null) return false;
+      if (
+        categoryFilter !== "all" &&
+        categoryFilter !== "none" &&
+        idea.category_id !== categoryFilter
+      )
+        return false;
+      if (statusFilter !== "all" && idea.status !== statusFilter) return false;
       return true;
-    } catch (e) {
-      pushToast("err", e instanceof Error ? e.message : "Erreur");
-      return false;
-    }
-  }
-
-  async function handleDelete(idea: Idea) {
-    try {
-      await deleteIdea(idea.id);
-      setIdeas((prev) => prev.filter((i) => i.id !== idea.id));
-      pushToast("ok", "Idée supprimée");
-    } catch (e) {
-      pushToast("err", e instanceof Error ? e.message : "Erreur");
-    }
-  }
-
-  if (ideas.length === 0) {
-    return (
-      <p className="mx-auto w-full max-w-2xl rounded-2xl border border-dashed border-neutral-200 px-6 py-12 text-center text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-        Aucune idée pour le moment.
-      </p>
-    );
-  }
+    });
+  }, [initialIdeas, categoryFilter, statusFilter]);
 
   return (
-    <>
-      <ul className="mx-auto flex w-full max-w-2xl flex-col gap-2">
-        {ideas.map((idea) => (
-          <IdeaItem
-            key={idea.id}
-            idea={idea}
-            onSaveEdit={(c) => handleSaveEdit(idea, c)}
-            onDelete={() => handleDelete(idea)}
-          />
-        ))}
-      </ul>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+      {/* View toggle */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex gap-1 rounded-full border border-neutral-200 bg-white p-0.5 dark:border-neutral-800 dark:bg-neutral-900">
+          <ViewBtn active={view === "list"} onClick={() => setView("list")}>
+            Liste
+          </ViewBtn>
+          <ViewBtn active={view === "kanban"} onClick={() => setView("kanban")}>
+            Kanban
+          </ViewBtn>
+        </div>
+        <span className="text-xs text-neutral-400">
+          {filtered.length} / {initialIdeas.length}
+        </span>
+      </div>
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-6 flex justify-center px-4">
-        <div className="flex w-full max-w-sm flex-col gap-2">
-          {toasts.map((t) => (
-            <div
-              key={t.id}
-              className={`pointer-events-auto rounded-full px-4 py-2 text-sm font-medium shadow-lg ${
-                t.kind === "ok"
-                  ? "bg-neutral-900 text-white dark:bg-neutral-50 dark:text-neutral-900"
-                  : "bg-red-500 text-white"
-              }`}
+      {/* Category filter */}
+      <div className="flex flex-wrap gap-2">
+        <FilterPill
+          active={categoryFilter === "all"}
+          onClick={() => setCategoryFilter("all")}
+        >
+          Toutes
+        </FilterPill>
+        <FilterPill
+          active={categoryFilter === "none"}
+          onClick={() => setCategoryFilter("none")}
+        >
+          Sans catégorie
+        </FilterPill>
+        {categories.map((c) => (
+          <FilterPill
+            key={c.id}
+            active={categoryFilter === c.id}
+            onClick={() => setCategoryFilter(c.id)}
+            color={c.color ?? undefined}
+          >
+            {c.name}
+          </FilterPill>
+        ))}
+      </div>
+
+      {/* Status filter (only in list view, kanban shows columns) */}
+      {view === "list" ? (
+        <div className="flex flex-wrap gap-2">
+          <FilterPill
+            active={statusFilter === "all"}
+            onClick={() => setStatusFilter("all")}
+          >
+            Tous statuts
+          </FilterPill>
+          {STATUS_ORDER.map((s) => (
+            <FilterPill
+              key={s}
+              active={statusFilter === s}
+              onClick={() => setStatusFilter(s)}
             >
-              {t.message}
-            </div>
+              {STATUS_LABELS[s]}
+            </FilterPill>
           ))}
         </div>
-      </div>
-    </>
+      ) : null}
+
+      {/* Content */}
+      {view === "list" ? (
+        <ListView ideas={filtered} categoryById={categoryById} />
+      ) : (
+        <KanbanView ideas={filtered} categoryById={categoryById} />
+      )}
+    </div>
   );
 }
 
-type Mode = "view" | "edit" | "confirm-delete";
+function ViewBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-4 py-1.5 text-xs font-medium transition ${
+        active
+          ? "bg-neutral-900 text-white dark:bg-neutral-50 dark:text-neutral-900"
+          : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-50"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
 
-function IdeaItem({
+function FilterPill({
+  active,
+  onClick,
+  color,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  color?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+        active
+          ? "border-neutral-900 bg-neutral-900 text-white dark:border-neutral-50 dark:bg-neutral-50 dark:text-neutral-900"
+          : "border-neutral-200 text-neutral-700 hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-800"
+      }`}
+    >
+      {color ? (
+        <span
+          className="h-2 w-2 rounded-full"
+          style={{ backgroundColor: color }}
+        />
+      ) : null}
+      {children}
+    </button>
+  );
+}
+
+function ListView({
+  ideas,
+  categoryById,
+}: {
+  ideas: Idea[];
+  categoryById: Map<string, Category>;
+}) {
+  if (ideas.length === 0) {
+    return (
+      <p className="rounded-2xl border border-dashed border-neutral-200 px-6 py-12 text-center text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+        Aucune idée pour ces filtres.
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {ideas.map((idea) => (
+        <IdeaCard
+          key={idea.id}
+          idea={idea}
+          category={
+            idea.category_id ? categoryById.get(idea.category_id) : undefined
+          }
+        />
+      ))}
+    </ul>
+  );
+}
+
+function KanbanView({
+  ideas,
+  categoryById,
+}: {
+  ideas: Idea[];
+  categoryById: Map<string, Category>;
+}) {
+  const grouped: Record<IdeaStatus, Idea[]> = {
+    draft: [],
+    preparing: [],
+    published: [],
+  };
+  for (const idea of ideas) grouped[idea.status].push(idea);
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {STATUS_ORDER.map((s) => (
+        <div key={s} className="flex flex-col gap-2">
+          <h3 className="px-1 text-xs font-medium uppercase tracking-widest text-neutral-500">
+            {STATUS_LABELS[s]} ({grouped[s].length})
+          </h3>
+          <div className="flex flex-col gap-2">
+            {grouped[s].length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-neutral-200 px-4 py-6 text-center text-xs text-neutral-400 dark:border-neutral-800">
+                —
+              </p>
+            ) : (
+              grouped[s].map((idea) => (
+                <IdeaCard
+                  key={idea.id}
+                  idea={idea}
+                  category={
+                    idea.category_id
+                      ? categoryById.get(idea.category_id)
+                      : undefined
+                  }
+                  compact
+                />
+              ))
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function IdeaCard({
   idea,
-  onSaveEdit,
-  onDelete,
+  category,
+  compact = false,
 }: {
   idea: Idea;
-  onSaveEdit: (newContent: string) => Promise<boolean>;
-  onDelete: () => Promise<void>;
+  category?: Category;
+  compact?: boolean;
 }) {
-  const [mode, setMode] = useState<Mode>("view");
-  const [draft, setDraft] = useState(idea.content);
-  const [busy, setBusy] = useState(false);
-
-  if (mode === "edit") {
-    return (
-      <li className="rounded-2xl border border-neutral-300 bg-white px-5 py-4 dark:border-neutral-700 dark:bg-neutral-900">
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={Math.max(3, Math.min(10, draft.split("\n").length))}
-          className="w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 outline-none transition focus:border-neutral-400 focus:ring-2 focus:ring-neutral-200 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-50 dark:focus:border-neutral-500 dark:focus:ring-neutral-700"
-        />
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setDraft(idea.content);
-              setMode("view");
-            }}
-            disabled={busy}
-            className="flex-1 rounded-full border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={async () => {
-              if (!draft.trim()) return;
-              setBusy(true);
-              const ok = await onSaveEdit(draft);
-              setBusy(false);
-              if (ok) setMode("view");
-            }}
-            disabled={busy || !draft.trim() || draft === idea.content}
-            className="flex-1 rounded-full bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-40 dark:bg-neutral-50 dark:text-neutral-900 dark:hover:bg-neutral-200"
-          >
-            {busy ? "…" : "Sauver"}
-          </button>
-        </div>
-      </li>
-    );
-  }
-
-  if (mode === "confirm-delete") {
-    return (
-      <li className="rounded-2xl border border-red-300 bg-red-50 px-5 py-4 dark:border-red-900 dark:bg-red-950/40">
-        <p className="text-sm text-neutral-900 dark:text-neutral-100">
-          Supprimer cette idée ?
-        </p>
-        <p className="mt-1 line-clamp-2 text-xs text-neutral-500 dark:text-neutral-400">
-          {idea.content || "(audio sans transcription)"}
-        </p>
-        <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            onClick={() => setMode("view")}
-            disabled={busy}
-            className="flex-1 rounded-full border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={async () => {
-              setBusy(true);
-              await onDelete();
-              // Le composant parent retire l'item, pas la peine de reset busy
-            }}
-            disabled={busy}
-            className="flex-1 rounded-full bg-red-500 px-3 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
-          >
-            {busy ? "…" : "Supprimer"}
-          </button>
-        </div>
-      </li>
-    );
-  }
-
-  // mode === "view"
   return (
-    <li className="rounded-2xl border border-neutral-200 bg-white px-5 py-4 dark:border-neutral-800 dark:bg-neutral-900">
-      <p className="line-clamp-3 whitespace-pre-wrap text-sm text-neutral-900 dark:text-neutral-100">
-        {idea.content || "(audio sans transcription)"}
-      </p>
-      <div className="mt-2 flex items-center justify-between gap-3 text-xs text-neutral-400">
-        <span className="truncate">
-          {new Date(idea.created_at).toLocaleString("fr-FR", {
-            dateStyle: "short",
-            timeStyle: "short",
-          })}{" "}
-          · {idea.transcription_source === "audio" ? "🎤" : "✍️"} {idea.status}
-        </span>
-        <div className="flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setDraft(idea.content);
-              setMode("edit");
-            }}
-            className="rounded-full border border-neutral-200 px-3 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            Modifier
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("confirm-delete")}
-            className="rounded-full border border-red-200 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-          >
-            Supprimer
-          </button>
+    <li className="list-none">
+      <Link
+        href={`/ideas/${idea.id}`}
+        className="block rounded-2xl border border-neutral-200 bg-white px-4 py-3 transition hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-700 dark:hover:bg-neutral-800"
+      >
+        {idea.title ? (
+          <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            {idea.title}
+          </p>
+        ) : null}
+        <p
+          className={`whitespace-pre-wrap text-sm text-neutral-700 dark:text-neutral-300 ${
+            compact ? "line-clamp-2" : "line-clamp-3"
+          }`}
+        >
+          {idea.content || (
+            <span className="italic text-neutral-400">
+              (audio sans transcription)
+            </span>
+          )}
+        </p>
+        <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-400">
+          <div className="flex items-center gap-2">
+            {category ? (
+              <span
+                className="flex items-center gap-1"
+                style={{ color: category.color ?? "#6b7280" }}
+              >
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: category.color ?? "#6b7280" }}
+                />
+                {category.name}
+              </span>
+            ) : null}
+            <span>{idea.transcription_source === "audio" ? "🎤" : "✍️"}</span>
+          </div>
+          <span className="shrink-0">
+            {new Date(idea.created_at).toLocaleString("fr-FR", {
+              dateStyle: "short",
+            })}
+          </span>
         </div>
-      </div>
+      </Link>
     </li>
   );
 }

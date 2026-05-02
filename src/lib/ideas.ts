@@ -118,6 +118,39 @@ export async function updateIdeaContent(
   return data as Idea;
 }
 
+/** Met à jour des champs arbitraires d'une idée. */
+export async function updateIdea(
+  ideaId: string,
+  patch: {
+    title?: string | null;
+    content?: string;
+    category_id?: string | null;
+    status?: "draft" | "preparing" | "published";
+  },
+): Promise<Idea> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("ideas")
+    .update(patch)
+    .eq("id", ideaId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as Idea;
+}
+
+/** Charge une idée par id. */
+export async function getIdea(ideaId: string): Promise<Idea | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("ideas")
+    .select("*")
+    .eq("id", ideaId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as Idea | null) ?? null;
+}
+
 /**
  * Supprime une idée et tous ses fichiers audio dans le Storage.
  * La RLS supprime en cascade les lignes media via FK.

@@ -342,12 +342,9 @@ export function IdeaCapture({ initialCount }: { initialCount: number }) {
         </span>
       </div>
 
-      <a
-        href="/ideas"
-        className="mt-2 inline-flex items-center justify-center gap-2 self-center text-sm font-medium text-neutral-700 underline underline-offset-4 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-50"
-      >
-        📋 Voir mes idées ({count})
-      </a>
+      <p className="mt-2 self-center text-xs text-neutral-400">
+        {count} idée{count > 1 ? "s" : ""} dans le carnet
+      </p>
 
       {/* Toasts */}
       <div className="pointer-events-none fixed inset-x-0 bottom-6 flex justify-center px-4">
