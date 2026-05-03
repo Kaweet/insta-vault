@@ -52,7 +52,7 @@ $$;
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'idea_status') then
-    create type insta_vault.idea_status as enum ('draft', 'preparing', 'published');
+    create type insta_vault.idea_status as enum ('draft', 'preparing', 'to_publish', 'published');
   end if;
   if not exists (select 1 from pg_type where typname = 'transcription_source') then
     create type insta_vault.transcription_source as enum ('text', 'audio');

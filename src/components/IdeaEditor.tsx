@@ -13,6 +13,7 @@ import type { Category, Idea, IdeaStatus, Media } from "@/lib/types";
 const STATUS_LABELS: Record<IdeaStatus, string> = {
   draft: "💡 Brouillon",
   preparing: "✏️ En préparation",
+  to_publish: "📤 À publier",
   published: "✅ Publiée",
 };
 
@@ -259,7 +260,7 @@ export function IdeaEditor({
         <label className="mb-1 block px-1 text-xs font-medium uppercase tracking-widest text-neutral-500">
           Statut
         </label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {(Object.keys(STATUS_LABELS) as IdeaStatus[]).map((s) => (
             <button
               key={s}

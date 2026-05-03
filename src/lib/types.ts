@@ -1,4 +1,4 @@
-export type IdeaStatus = "draft" | "preparing" | "published";
+export type IdeaStatus = "draft" | "preparing" | "to_publish" | "published";
 export type TranscriptionSource = "text" | "audio";
 export type MediaKind = "audio" | "photo" | "link";
 

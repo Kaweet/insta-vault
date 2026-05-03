@@ -13,9 +13,10 @@ import type { Category, Idea, IdeaStatus } from "@/lib/types";
 const STATUS_LABELS: Record<IdeaStatus, string> = {
   draft: "Brouillon",
   preparing: "En préparation",
+  to_publish: "À publier",
   published: "Publiée",
 };
-const STATUS_ORDER: IdeaStatus[] = ["draft", "preparing", "published"];
+const STATUS_ORDER: IdeaStatus[] = ["draft", "preparing", "to_publish", "published"];
 
 type View = "list" | "kanban";
 type CategoryFilter = "all" | "none" | string;
@@ -279,6 +280,7 @@ function KanbanView({
   const grouped: Record<IdeaStatus, AnyIdea[]> = {
     draft: [],
     preparing: [],
+    to_publish: [],
     published: [],
   };
   for (const item of ideas) {

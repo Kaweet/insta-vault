@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/client";
 import type {
   AudioBlobResult,
 } from "@/lib/useAudioRecorder";
-import type { Idea } from "@/lib/types";
+import type { Idea, IdeaStatus } from "@/lib/types";
 
 export type SaveIdeaInput = {
   /** Si présent, on update cette idée. Sinon on en crée une nouvelle. */
@@ -127,7 +127,7 @@ export async function updateIdea(
     content?: string;
     caption?: string | null;
     category_id?: string | null;
-    status?: "draft" | "preparing" | "published";
+    status?: IdeaStatus;
   },
 ): Promise<Idea> {
   const supabase = createClient();
